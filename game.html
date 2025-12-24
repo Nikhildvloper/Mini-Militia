@@ -18,9 +18,7 @@
         }
         .green { color: #2ecc71; font-weight: bold; } 
         .red { color: #e74c3c; } 
-        .blue { color: #3498db; } 
         .yellow { color: #f1c40f; } 
-        .orange { color: #e67e22; }
 
         #deploy-screen {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
@@ -36,43 +34,38 @@
         @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
         
         #loading-text { display: none; margin-top: 15px; color: #aaa; font-size: 14px; }
-
         .coord-box { margin-top: 10px; border-top: 1px solid #555; padding-top: 5px; font-size: 12px; }
     </style>
 </head>
 <body>
 
     <div id="deploy-screen">
-        <button id="deploy-btn">DEPLOY SOLDIER</button>
-        <div id="loading-text">ESTABLISHING UPLINK...</div>
+        <button id="deploy-btn">DEPLOY SQUAD</button>
+        <div id="loading-text">ESTABLISHING MESH NETWORK...</div>
     </div>
 
     <div id="ui-layer">
         <div id="status-panel">
             <div>ME: <span id="disp-id" class="yellow">...</span></div>
-            <div>ROLE: <span id="disp-role">ASSIGNING...</span></div>
             <div>STATUS: <span id="disp-status" class="red">INITIALIZING</span></div>
             
             <div class="coord-box">
                 <div>MY POS: <span id="my-coords" class="green">0, 0</span></div>
-                <div>ENEMY: <span id="enemy-coords" class="red">WAITING...</span></div>
+                <div style="margin-top:5px; color:#aaa;">(Enemies tracked internally)</div>
             </div>
         </div>
     </div>
 
     <script type="module">
-        // --- IMPORTS ---
         import { startNetwork, broadcastData } from "./webrtc.js";
         import { initGame, handleNetworkData, handlePeerDisconnect, getPlayerPosition } from "./gameloop.js";
 
-        // --- SESSION ---
         const sessionRaw = localStorage.getItem('mm_session');
         if (!sessionRaw) window.location.href = "index.html";
         const session = JSON.parse(sessionRaw);
         
         document.getElementById('disp-id').innerText = session.name;
 
-        // --- 1. START TRIGGER ---
         const deployBtn = document.getElementById('deploy-btn');
         deployBtn.addEventListener('click', async () => {
             deployBtn.style.display = 'none';
@@ -83,31 +76,20 @@
             document.getElementById('deploy-screen').style.display = 'none';
             document.getElementById('ui-layer').style.display = 'block';
 
-            // Start Systems
             startNetwork(session.room, session.id, session.name);
             initGame();
         });
 
-        // --- 2. CONNECTING THE MODULES ---
+        window.onNetworkData = (id, data) => handleNetworkData(id, data);
+        window.onPeerDisconnect = (id) => handlePeerDisconnect(id);
         
-        // When WebRTC receives data, pass it to Game Loop
-        window.onNetworkData = (id, data) => {
-            handleNetworkData(id, data);
-        };
-
-        // When WebRTC says a peer dropped, tell Game Loop to remove sprite
-        window.onPeerDisconnect = (id) => {
-            handlePeerDisconnect(id);
-        };
-
-        // When WebRTC connects, grab current player pos from Game Loop and send it immediately
         window.onNetworkConnect = () => {
+            // Send position to new peer immediately
             setTimeout(() => {
                 const pos = getPlayerPosition();
                 if(pos) broadcastData(pos);
             }, 500);
         };
-
     </script>
 </body>
 </html>
