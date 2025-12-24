@@ -121,3 +121,23 @@ input:focus { border-color: #4CAF50; background: #34495e; }
 @media screen and (orientation: portrait) {
     #rotate-message { display: flex; }
 }
+
+/* NEW: COUNTDOWN TIMER */
+#countdown-overlay {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 15rem; /* Massive Text */
+    color: #e74c3c;
+    text-shadow: 5px 5px 0px #000;
+    z-index: 1000;
+    pointer-events: none; /* Let clicks pass through */
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0% { transform: translate(-50%, -50%) scale(1); }
+    50% { transform: translate(-50%, -50%) scale(1.1); }
+    100% { transform: translate(-50%, -50%) scale(1); }
+}
