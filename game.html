@@ -61,8 +61,9 @@
     </div>
 
     <script type="module">
-        // Import the Network Engine
+        // --- IMPORTS ---
         import { startNetwork, broadcastData } from "./webrtc.js";
+        import { initGame, handleNetworkData, handlePeerDisconnect, getPlayerPosition } from "./gameloop.js";
 
         // --- SESSION ---
         const sessionRaw = localStorage.getItem('mm_session');
@@ -71,11 +72,7 @@
         
         document.getElementById('disp-id').innerText = session.name;
 
-        // --- GLOBALS ---
-        let game, player, cursors, wasd;
-        let otherPlayers = {}; // Stores Enemy Sprites
-
-        // --- 1. THE TRIGGER ---
+        // --- 1. START TRIGGER ---
         const deployBtn = document.getElementById('deploy-btn');
         deployBtn.addEventListener('click', async () => {
             deployBtn.style.display = 'none';
@@ -86,102 +83,31 @@
             document.getElementById('deploy-screen').style.display = 'none';
             document.getElementById('ui-layer').style.display = 'block';
 
-            // Start Networking
+            // Start Systems
             startNetwork(session.room, session.id, session.name);
-            
-            // Start Game
-            initPhaser();
+            initGame();
         });
 
-        // --- 2. NETWORK CALLBACKS (Called by webrtc.js) ---
+        // --- 2. CONNECTING THE MODULES ---
         
+        // When WebRTC receives data, pass it to Game Loop
         window.onNetworkData = (id, data) => {
-            if (otherPlayers[id]) {
-                // Update Existing
-                otherPlayers[id].targetX = data.x;
-                otherPlayers[id].targetY = data.y;
-                document.getElementById('enemy-coords').innerText = `${data.x}, ${data.y}`;
-                document.getElementById('enemy-coords').className = "green";
-            } else {
-                // Spawn New
-                spawnEnemy(id, data.x, data.y);
-            }
+            handleNetworkData(id, data);
         };
 
+        // When WebRTC says a peer dropped, tell Game Loop to remove sprite
         window.onPeerDisconnect = (id) => {
-            if (otherPlayers[id]) {
-                otherPlayers[id].destroy();
-                delete otherPlayers[id];
-            }
-            document.getElementById('enemy-coords').innerText = "WAITING...";
-            document.getElementById('enemy-coords').className = "red";
+            handlePeerDisconnect(id);
         };
 
-        // When pipe opens, send initial spawn location
+        // When WebRTC connects, grab current player pos from Game Loop and send it immediately
         window.onNetworkConnect = () => {
             setTimeout(() => {
-                if(player) {
-                    broadcastData({ x: Math.round(player.x), y: Math.round(player.y) });
-                }
+                const pos = getPlayerPosition();
+                if(pos) broadcastData(pos);
             }, 500);
         };
 
-
-        // --- 3. PHASER ENGINE ---
-        function initPhaser() {
-            game = new Phaser.Game({
-                type: Phaser.AUTO,
-                scale: { mode: Phaser.Scale.RESIZE, parent: document.body },
-                backgroundColor: '#2c3e50',
-                physics: { default: 'arcade', arcade: { gravity: { y: 0 } } },
-                scene: { preload, create, update }
-            });
-        }
-
-        function preload() {
-            const g = this.make.graphics({x:0, y:0, add:false});
-            g.fillStyle(0x3498db); g.fillRect(0,0,32,32); g.generateTexture('me', 32, 32);
-            g.fillStyle(0xe74c3c); g.fillRect(0,0,32,32); g.generateTexture('enemy', 32, 32);
-        }
-
-        function create() {
-            const self = this;
-            this.add.grid(0,0,2000,2000,50,50,0x000000).setAlpha(0.2);
-            this.physics.world.setBounds(-1000, -1000, 2000, 2000);
-            
-            player = this.physics.add.sprite(Math.random()*400, Math.random()*400, 'me');
-            this.cameras.main.startFollow(player);
-            cursors = this.input.keyboard.createCursorKeys();
-            wasd = this.input.keyboard.addKeys('W,A,S,D');
-
-            // Exposed spawn function
-            window.spawnEnemy = (id, x, y) => {
-                const e = self.add.sprite(x, y, 'enemy');
-                e.targetX = x; e.targetY = y;
-                otherPlayers[id] = e;
-            };
-        }
-
-        function update() {
-            if(!player) return;
-            let ax=0, ay=0; const speed=600;
-            if (cursors.left.isDown || wasd.A.isDown) ax=-speed;
-            else if (cursors.right.isDown || wasd.D.isDown) ax=speed;
-            if (cursors.up.isDown || wasd.W.isDown) ay=-speed;
-            else if (cursors.down.isDown || wasd.S.isDown) ay=speed;
-            player.setVelocity(ax, ay);
-
-            document.getElementById('my-coords').innerText = `${Math.round(player.x)}, ${Math.round(player.y)}`;
-
-            // Send Movement to Network
-            broadcastData({x: Math.round(player.x), y: Math.round(player.y)});
-
-            // Smooth Movement for enemies
-            Object.values(otherPlayers).forEach(e => {
-                e.x = Phaser.Math.Linear(e.x, e.targetX, 0.2);
-                e.y = Phaser.Math.Linear(e.y, e.targetY, 0.2);
-            });
-        }
     </script>
 </body>
 </html>
