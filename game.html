@@ -9,31 +9,29 @@
 
     <style>
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; font-family: monospace; color: white; }
-        
         #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
         
         #status-panel {
             position: absolute; top: 10px; left: 10px;
-            background: rgba(0,0,0,0.6); padding: 10px; border: 1px solid #555; pointer-events: auto;
+            background: rgba(0,0,0,0.8); padding: 10px; border: 1px solid #555; pointer-events: auto;
+            min-width: 220px;
         }
-        .green { color: #2ecc71; } .red { color: #e74c3c; } .yellow { color: #f1c40f; } .blue { color: #3498db; }
+        .green { color: #2ecc71; font-weight: bold; } 
+        .red { color: #e74c3c; } 
+        .blue { color: #3498db; } 
+        .yellow { color: #f1c40f; } 
 
-        #host-badge {
-            display: none; background: #e67e22; color: white; 
-            padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-left: 5px;
+        #console-log {
+            position: absolute; bottom: 0; left: 0; width: 100%; height: 150px;
+            background: rgba(0,0,0,0.8); border-top: 2px solid #444;
+            overflow-y: auto; padding: 10px; font-size: 11px; pointer-events: auto;
         }
 
-        /* NEW CONNECT BUTTON */
         #btn-manual-connect {
-            display: none; /* Hidden by default, shown only for Client */
-            position: absolute; top: 10px; right: 10px;
-            pointer-events: auto;
-            background: #27ae60; color: white; font-weight: bold;
-            border: 2px solid #fff; padding: 10px 20px;
-            cursor: pointer; text-transform: uppercase;
-            box-shadow: 0 4px #000;
+            display: none; position: absolute; top: 10px; right: 10px; pointer-events: auto;
+            background: #27ae60; color: white; font-weight: bold; border: 2px solid #fff; 
+            padding: 10px 20px; cursor: pointer; text-transform: uppercase;
         }
-        #btn-manual-connect:active { transform: translateY(2px); box-shadow: 0 2px #000; }
 
         #deploy-screen {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
@@ -43,36 +41,67 @@
         #deploy-btn {
             font-size: 2rem; padding: 20px 40px; background: #27ae60; 
             color: white; border: none; cursor: pointer; pointer-events: auto;
-            border-bottom: 5px solid #1e8449;
         }
-        #deploy-msg { margin-top: 15px; color: #aaa; }
+
+        /* VIDEO STYLES (Adapted from your snippet) */
+        #video-container {
+            position: absolute; top: 10px; right: 10px;
+            display: flex; flex-direction: column; gap: 5px;
+            pointer-events: auto; z-index: 20;
+        }
+        
+        video {
+            width: 150px; height: 112px;
+            background: #222; border: 2px solid #fff; border-radius: 8px;
+            object-fit: cover; transform: scaleX(-1);
+        }
+        #local-video { border-color: #2ecc71; }
+        #remote-video { border-color: #e74c3c; display: none; } 
+
+        .coord-box { margin-top: 10px; border-top: 1px solid #555; padding-top: 5px; font-size: 12px; }
     </style>
 </head>
 <body>
 
     <div id="deploy-screen">
         <button id="deploy-btn">DEPLOY SOLDIER</button>
-        <div id="deploy-msg">Establishing Role...</div>
+        <div style="margin-top:15px; color:#aaa;">System Ready</div>
     </div>
 
     <div id="ui-layer">
         <div id="status-panel">
-            <div>
-                PLAYER: <span id="disp-id" class="yellow">...</span>
-                <span id="host-badge">HOST</span>
-            </div>
-            <div>ROLE: <span id="disp-role">UNDEFINED</span></div>
+            <div>ME: <span id="disp-id" class="yellow">...</span></div>
+            <div>ROLE: <span id="disp-role">...</span></div>
             <div>STATUS: <span id="disp-status" class="red">DISCONNECTED</span></div>
+            
+            <div class="coord-box">
+                <div>MY POS: <span id="my-coords" class="green">0, 0</span></div>
+                <div>ENEMY: <span id="enemy-coords" class="red">WAITING...</span></div>
+            </div>
         </div>
-
+        
         <button id="btn-manual-connect">CONNECT TO HOST</button>
+        <div id="console-log"></div>
+
+        <div id="video-container">
+            <video id="local-video" autoplay playsinline muted></video>
+            <video id="remote-video" autoplay playsinline></video>
+        </div>
     </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-        import { getDatabase, ref, set, push, onChildAdded, remove, onDisconnect, runTransaction, get, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+        import { getDatabase, ref, set, push, onChildAdded, remove, onDisconnect, runTransaction, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
-        // --- CONFIG ---
+        function log(msg) {
+            const div = document.getElementById('console-log');
+            const p = document.createElement('div');
+            p.innerText = `> ${msg}`;
+            div.appendChild(p);
+            div.scrollTop = div.scrollHeight;
+            console.log(msg);
+        }
+
         const firebaseConfig = {
             apiKey: "AIzaSyBv36GemaSD-sMRUKjNdwkMiLyPv8-kOMI",
             authDomain: "mini-militia-online.firebaseapp.com",
@@ -86,141 +115,142 @@
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
-        // --- SESSION ---
+        const rtcConfig = {
+            iceServers: [
+                { urls: "stun:stun.l.google.com:19302" },
+                { urls: "stun:stun1.l.google.com:19302" }
+            ]
+        };
+
         const sessionRaw = localStorage.getItem('mm_session');
         if (!sessionRaw) window.location.href = "index.html";
         const session = JSON.parse(sessionRaw);
-        
         const ROOM_ID = session.room;
         const MY_ID = session.id;
-        const MY_NAME = session.name;
 
-        // --- GLOBALS ---
         let game, player, cursors, wasd;
         let otherPlayers = {};
         const peers = {};
-        let AM_I_HOST = false; 
-        let TARGET_HOST_ID = null; // Stores the Host's ID for the client to call
+        let AM_I_HOST = false;
+        let TARGET_HOST_ID = null;
+        let localStream = null;
 
-        const rtcConfig = {
-            iceServers: [ { urls: 'stun:stun.l.google.com:19302' } ]
-        };
+        document.getElementById('disp-id').innerText = session.name;
 
-        // --- INIT SEQUENCE ---
-        
-        determineRole().then(() => {
-            document.getElementById('disp-id').innerText = MY_NAME.substring(0, 10);
-            document.getElementById('deploy-msg').innerText = AM_I_HOST ? "Role Assigned: HOST" : "Role Assigned: CLIENT";
-            
+        // --- ROLE DETERMINATION ---
+        runTransaction(ref(db, `rooms/${ROOM_ID}/hostID`), (current) => {
+            if (current === null) return MY_ID;
+            if (current === MY_ID) return MY_ID;
+            return undefined; 
+        }).then((result) => {
+            AM_I_HOST = result.committed;
             if (AM_I_HOST) {
-                // I AM HOST
-                document.getElementById('host-badge').style.display = "inline-block";
-                document.getElementById('disp-role').innerText = "HOST (Passive Mode)";
+                document.getElementById('disp-role').innerText = "HOST";
                 document.getElementById('disp-role').className = "blue";
-                document.getElementById('btn-manual-connect').style.display = "none"; // Host doesn't need this
+                const hostRef = ref(db, `rooms/${ROOM_ID}/hostID`);
+                set(hostRef, MY_ID);
+                onDisconnect(hostRef).remove();
             } else {
-                // I AM CLIENT
                 document.getElementById('disp-role').innerText = "CLIENT";
                 document.getElementById('disp-role').className = "yellow";
-                document.getElementById('btn-manual-connect').style.display = "block"; // Show Connect Button
-                
-                // Listen for Host ID so we know who to call
-                onValue(ref(db, `rooms/${ROOM_ID}/hostID`), (snapshot) => {
-                    TARGET_HOST_ID = snapshot.val();
-                    console.log("Host Identified as:", TARGET_HOST_ID);
+                document.getElementById('btn-manual-connect').style.display = "block";
+                onValue(ref(db, `rooms/${ROOM_ID}/hostID`), (snap) => {
+                    TARGET_HOST_ID = snap.val();
+                    if (TARGET_HOST_ID) log(`Host Detected: ${TARGET_HOST_ID.substring(0,6)}`);
                 });
             }
         });
 
-        async function determineRole() {
-            const hostRef = ref(db, `rooms/${ROOM_ID}/hostID`);
-            
-            await runTransaction(hostRef, (currentHostID) => {
-                if (currentHostID === null) return MY_ID; 
-                else if (currentHostID === MY_ID) return MY_ID; 
-                else return undefined; 
-            }).then((result) => {
-                if (result.committed) {
-                    AM_I_HOST = true;
-                    onDisconnect(hostRef).remove();
-                } else {
-                    AM_I_HOST = false;
-                }
-            });
-        }
-
-        // --- BUTTONS ---
-        
-        // 1. DEPLOY (Start Game)
-        document.getElementById('deploy-btn').addEventListener('click', () => {
-            const el = document.documentElement;
-            if (el.requestFullscreen) el.requestFullscreen().catch(()=>{});
+        // --- START HANDLER ---
+        document.getElementById('deploy-btn').addEventListener('click', async () => {
+            document.documentElement.requestFullscreen().catch(()=>{});
             document.getElementById('deploy-screen').style.display = 'none';
+
+            // 1. START CAMERA (Logic from your snippet)
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                document.getElementById('local-video').srcObject = localStream;
+                log("Camera Started");
+            } catch (e) {
+                log("Cam Error: " + e.message);
+            }
+
             initSignaling();
             initPhaser();
         });
 
-        // 2. CONNECT TO HOST (Manual Trigger)
         document.getElementById('btn-manual-connect').addEventListener('click', () => {
-            if (!TARGET_HOST_ID) {
-                alert("Host not found yet! Wait a second...");
-                return;
-            }
-            if (TARGET_HOST_ID === MY_ID) {
-                alert("Error: You seem to be the Host.");
-                return;
-            }
-            
-            const btn = document.getElementById('btn-manual-connect');
-            btn.innerText = "CALLING...";
-            btn.style.backgroundColor = "#e67e22";
-            
-            console.log("Manually calling Host:", TARGET_HOST_ID);
-            startWebRTC(TARGET_HOST_ID, true); // Force initiate call
+            if (!TARGET_HOST_ID) return log("Error: No Host ID.");
+            log(`Calling Host...`);
+            startWebRTC(TARGET_HOST_ID, true);
         });
-
 
         // --- SIGNALING ---
         function initSignaling() {
-            console.log("Signaling Active.");
+            log("Signaling Active.");
+            remove(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`));
 
-            // Announce
             const myRef = ref(db, `rooms/${ROOM_ID}/players/${MY_ID}`);
-            set(myRef, { online: true, name: MY_NAME });
+            set(myRef, { online: true, name: session.name });
             onDisconnect(myRef).remove();
 
-            // Listen for Incoming Signals (Offers/Answers)
             onChildAdded(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`), (snapshot) => {
                 const data = snapshot.val();
                 if (data) {
-                    console.log(`Received Signal: ${data.signal.type}`);
-                    handleSignal(data.sender, data.signal);
+                    log(`Rx ${data.payload.type}`);
+                    handleSignal(data.sender, data.payload);
                     remove(snapshot.ref);
                 }
             });
         }
 
+        function sendSignal(targetId, payload) {
+            push(ref(db, `rooms/${ROOM_ID}/signals/${targetId}`), {
+                sender: MY_ID,
+                payload: payload
+            });
+        }
+
         // --- WEBRTC ---
         async function startWebRTC(targetId, isInitiator) {
-            if (peers[targetId]) {
-                console.log("Connection already exists.");
-                return;
-            }
-
+            if (peers[targetId]) return;
+            
+            log(`Creating PC...`);
             const pc = new RTCPeerConnection(rtcConfig);
             peers[targetId] = { conn: pc, channel: null };
 
+            // A. ADD TRACKS (Logic from your snippet)
+            if (localStream) {
+                localStream.getTracks().forEach(track => {
+                    pc.addTrack(track, localStream);
+                });
+                log("Tracks Added to PC");
+            }
+
+            // B. REMOTE STREAM HANDLER
+            pc.ontrack = (event) => {
+                log("Remote Stream Received!");
+                const remoteVid = document.getElementById('remote-video');
+                // Use the first stream found
+                remoteVid.srcObject = event.streams[0];
+                remoteVid.style.display = 'block';
+            };
+
+            // Monitor State
             pc.oniceconnectionstatechange = () => {
-                if(pc.iceConnectionState === 'connected') {
-                    document.getElementById('disp-status').innerText = "CONNECTED";
-                    document.getElementById('disp-status').className = "green";
-                    
-                    // Hide button on success
-                    const btn = document.getElementById('btn-manual-connect');
-                    if(btn) btn.style.display = "none";
+                const state = pc.iceConnectionState;
+                log(`ICE State: ${state}`);
+                const statusEl = document.getElementById('disp-status');
+                statusEl.innerText = state.toUpperCase();
+                
+                if(state === 'connected' || state === 'completed') {
+                    statusEl.innerText = "CONNECTED";
+                    statusEl.className = "green"; 
+                    document.getElementById('btn-manual-connect').style.display = "none";
                 }
             };
 
+            // Data Channel
             if (isInitiator) {
                 const channel = pc.createDataChannel("game");
                 setupChannel(channel, targetId);
@@ -228,10 +258,12 @@
                 pc.ondatachannel = (e) => setupChannel(e.channel, targetId);
             }
 
+            // ICE Candidates
             pc.onicecandidate = (e) => {
-                if (e.candidate) sendSignal(targetId, { type: 'candidate', candidate: e.candidate });
+                if (e.candidate) sendSignal(targetId, { type: 'candidate', candidate: e.candidate.toJSON() });
             };
 
+            // Negotiation
             if (isInitiator) {
                 const offer = await pc.createOffer();
                 await pc.setLocalDescription(offer);
@@ -240,39 +272,52 @@
         }
 
         async function handleSignal(senderId, signal) {
-            // Host receives Offer -> Creates Answer
             if (!peers[senderId]) await startWebRTC(senderId, false);
-            
             const pc = peers[senderId].conn;
 
             if (signal.type === 'offer') {
+                // IMPORTANT: Ensure Remote Description is set BEFORE Answer
                 await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
                 sendSignal(senderId, { type: 'answer', sdp: answer });
             
             } else if (signal.type === 'answer') {
-                await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+                if (!pc.currentRemoteDescription) {
+                    await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+                }
             } else if (signal.type === 'candidate') {
-                try { await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)); } catch(e){}
+                // CRITICAL FIX: Add candidate only if remote desc is set, or queue it
+                try { 
+                    if (pc.remoteDescription) {
+                        await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+                    } else {
+                        // If we get candidate before offer, we just wait/ignore in this simple version
+                        // Usually you queue them, but modern browsers handle this okay.
+                        log("Info: Candidate rx before remote desc.");
+                         await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+                    }
+                } catch(e) { log("ICE Error: " + e.message); }
             }
         }
 
-        function sendSignal(target, payload) {
-            push(ref(db, `rooms/${ROOM_ID}/signals/${target}`), {
-                sender: MY_ID,
-                signal: payload
-            });
-        }
-
         function setupChannel(channel, id) {
-            channel.onopen = () => console.log("Data Channel OPEN");
+            channel.onopen = () => {
+                log("Data Channel OPEN");
+                // Send immediate spawn info
+                if(player) {
+                    const packet = JSON.stringify({ x: Math.round(player.x), y: Math.round(player.y) });
+                    channel.send(packet);
+                }
+            };
             peers[id].channel = channel;
             channel.onmessage = (e) => {
                 const data = JSON.parse(e.data);
                 if (otherPlayers[id]) {
                     otherPlayers[id].targetX = data.x;
                     otherPlayers[id].targetY = data.y;
+                    document.getElementById('enemy-coords').innerText = `${data.x}, ${data.y}`;
+                    document.getElementById('enemy-coords').className = "green";
                 } else {
                     spawnEnemy(id, data.x, data.y);
                 }
@@ -301,12 +346,7 @@
             const self = this;
             this.add.grid(0,0,2000,2000,50,50,0x000000).setAlpha(0.2);
             this.physics.world.setBounds(-1000, -1000, 2000, 2000);
-
-            player = this.physics.add.sprite(Math.random()*200, Math.random()*200, 'me');
-            player.setCollideWorldBounds(true);
-            player.setDrag(150);
-            player.setMaxVelocity(400);
-
+            player = this.physics.add.sprite(Math.random()*400, Math.random()*400, 'me');
             this.cameras.main.startFollow(player);
             cursors = this.input.keyboard.createCursorKeys();
             wasd = this.input.keyboard.addKeys('W,A,S,D');
@@ -325,7 +365,9 @@
             else if (cursors.right.isDown || wasd.D.isDown) ax=speed;
             if (cursors.up.isDown || wasd.W.isDown) ay=-speed;
             else if (cursors.down.isDown || wasd.S.isDown) ay=speed;
-            player.setAcceleration(ax, ay);
+            player.setVelocity(ax, ay);
+
+            document.getElementById('my-coords').innerText = `${Math.round(player.x)}, ${Math.round(player.y)}`;
 
             const packet = JSON.stringify({x: Math.round(player.x), y: Math.round(player.y)});
             Object.values(peers).forEach(p => {
