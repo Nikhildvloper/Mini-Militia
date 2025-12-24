@@ -98,15 +98,18 @@
     </div>
 
     <script type="module">
-        // 1. IMPORT FIREBASE (V12.7.0)
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
-        // We added 'firebase-database.js' here because your snippet was missing it!
-        import { getDatabase, ref, get, set, child } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-database.js";
+        // 1. IMPORT FIREBASE (Stable v10.12.2)
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import { getDatabase, ref, get, set, child } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
-        // 2. YOUR CONFIGURATION
+        // 2. YOUR CONFIGURATION (Updated with Asia-Southeast1 URL)
         const firebaseConfig = {
             apiKey: "AIzaSyBv36GemaSD-sMRUKjNdwkMiLyPv8-kOMI",
             authDomain: "mini-militia-online.firebaseapp.com",
+            
+            // --- CRITICAL FIX: YOUR REGION SPECIFIC URL ---
+            databaseURL: "https://mini-militia-online-default-rtdb.asia-southeast1.firebasedatabase.app", 
+            
             projectId: "mini-militia-online",
             storageBucket: "mini-militia-online.firebasestorage.app",
             messagingSenderId: "1042367396622",
@@ -115,9 +118,15 @@
         };
 
         // 3. INITIALIZE
-        const app = initializeApp(firebaseConfig);
-        const db = getDatabase(app);
-        console.log("Firebase v12 Initialized!");
+        let app, db;
+        try {
+            app = initializeApp(firebaseConfig);
+            db = getDatabase(app);
+            console.log("Firebase Initialized for Asia-Southeast1");
+        } catch (e) {
+            console.error("Firebase Init Error:", e);
+            document.getElementById('status-msg').innerText = "Init Failed: " + e.message;
+        }
 
         // --- DOM ELEMENTS ---
         const startScreen = document.getElementById('start-screen');
@@ -132,7 +141,6 @@
             const docEl = document.documentElement;
             if (docEl.requestFullscreen) docEl.requestFullscreen().catch(err => console.log(err));
             
-            // Basic orientation lock attempt
             if (screen.orientation && screen.orientation.lock) {
                 screen.orientation.lock('landscape').catch(() => {});
             }
@@ -141,7 +149,7 @@
             lobbyScreen.classList.remove('hidden');
         });
 
-        // --- JOIN BUTTON LOGIC (Using Modular SDK) ---
+        // --- JOIN BUTTON LOGIC ---
         btnJoin.addEventListener('click', () => {
             const name = document.getElementById('input-name').value.trim();
             const room = document.getElementById('input-room').value.trim();
@@ -154,11 +162,11 @@
             // Lock UI
             btnJoin.disabled = true;
             btnJoin.innerText = "CONNECTING...";
-            statusMsg.innerText = "Contacting Firebase...";
+            statusMsg.innerText = "Connecting to Asia Server...";
 
             const roomRef = ref(db, 'rooms/' + room);
 
-            // CHECK IF ROOM EXISTS
+            // READ DATABASE
             get(roomRef).then((snapshot) => {
                 if (snapshot.exists()) {
                     console.log("Room exists. Joining...");
@@ -168,10 +176,18 @@
                     enterGame(room, name, true);
                 }
             }).catch((error) => {
-                console.error(error);
+                console.error("Firebase Read Error:", error);
+                
+                let errorText = "Connection Failed: " + error.message;
+                if (error.code === 'PERMISSION_DENIED') {
+                    errorText = "Error: Database Rules are locked. Go to Firebase Console -> Rules.";
+                } else if (error.message.includes("client is offline")) {
+                    errorText = "Error: Check your internet connection.";
+                }
+                
+                statusMsg.innerText = errorText;
                 btnJoin.disabled = false;
                 btnJoin.innerText = "JOIN BATTLE";
-                statusMsg.innerText = "Error: " + error.message;
             });
         });
 
@@ -179,16 +195,16 @@
         function enterGame(roomName, playerName, isCreator) {
             const myPlayerId = 'soldier_' + Math.floor(Math.random() * 100000);
             
-            // Store data globally so other scripts can access it later
+            // Store global game data
             window.gameData = {
                 room: roomName,
                 name: playerName,
                 id: myPlayerId,
                 isHost: isCreator,
-                db: db // Pass the database instance
+                db: db 
             };
 
-            // Write player to DB
+            // Write player data
             set(ref(db, 'rooms/' + roomName + '/players/' + myPlayerId), {
                 name: playerName,
                 x: 100,
@@ -200,8 +216,12 @@
                 document.getElementById('game-loading-text').innerText = 
                     isCreator ? "DEPLOYING TO " + roomName : "JOINING " + roomName;
                 
-                console.log("SUCCESS! Ready for Phaser Game Loop.");
+                console.log("SUCCESS! Ready for Phase 2.");
+                
+                // --- NEXT STEP HOOK ---
+                // We will load the game.js script here in the next step
             }).catch((err) => {
+                console.error("Write Error:", err);
                 statusMsg.innerText = "Write Failed: " + err.message;
                 btnJoin.disabled = false;
             });
