@@ -4,136 +4,208 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Doodle Army Web Clone</title>
+    
     <style>
         /* --- CSS STYLES --- */
-
-        /* Reset default browser margins and ensure full height */
         body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden; /* Prevent scrolling */
-            background-color: #000;
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            overflow: hidden; background-color: #000;
+            font-family: 'Arial Black', 'Impact', sans-serif;
+            color: white;
+            user-select: none;
         }
 
-        /* The main background using your generated image */
-        body {
-            /* IMPORTANT: Ensure image_1.png is in the same folder */
-            background-image: url('image_1.png'); 
-            background-position: center center;
-            background-repeat: no-repeat;
-            background-size: cover; /* Ensure image covers entire screen */
-            font-family: 'Arial Black', 'Impact', sans-serif; /* Thick, game-like font */
+        .bg-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background-image: url('image_1.png'); /* Ensure this image exists! */
+            background-size: cover; background-position: center;
+            z-index: -1;
         }
 
-        /* A dark overlay to make text readable against the busy background */
-        #overlay-container {
-            width: 100%;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-            justify-content: center; /* Center vertically */
-            align-items: center; /* Center horizontally */
-            background-color: rgba(0, 0, 0, 0.4); /* Semi-transparent black */
+        .screen {
+            width: 100%; height: 100%;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            background-color: rgba(0, 0, 0, 0.6);
+            position: absolute; top: 0; left: 0;
+            transition: opacity 0.5s;
         }
 
-        /* Game Title */
-        h1.game-title {
-            color: #ffffff;
-            font-size: 4rem;
+        .hidden { display: none !important; }
+
+        h1 {
+            font-size: 3rem; text-transform: uppercase;
+            text-shadow: 3px 3px 0 #000; margin-bottom: 20px; text-align: center;
+        }
+
+        input {
+            width: 300px; padding: 15px; margin: 10px;
+            font-size: 1.2rem; font-family: inherit;
+            background: #2c3e50; border: 3px solid #7f8c8d;
+            color: white; text-align: center; text-transform: uppercase;
+            outline: none;
+        }
+        input:focus { border-color: #4CAF50; background: #34495e; }
+
+        .btn-action {
+            padding: 15px 50px; font-size: 1.5rem; margin-top: 20px;
+            font-family: inherit; color: white; cursor: pointer;
+            background-color: #4CAF50; border: 4px solid #2E7D32;
+            box-shadow: 0 6px #1B5E20; border-radius: 8px;
             text-transform: uppercase;
-            /* A thick black border around text for cartoon effect */
-            text-shadow: 
-                3px 3px 0 #000,
-                -1px -1px 0 #000,  
-                1px -1px 0 #000,
-                -1px 1px 0 #000,
-                1px 1px 0 #000;
-            margin-bottom: 50px;
+        }
+        .btn-action:active { transform: translateY(4px); box-shadow: 0 2px #1B5E20; }
+        .btn-action:disabled { background-color: #555; border-color: #333; box-shadow: none; }
+
+        #rotate-message {
+            display: none; position: fixed; top: 0; left: 0;
+            width: 100%; height: 100%; background: #1a1a1a;
+            z-index: 9999; flex-direction: column;
+            justify-content: center; align-items: center;
             text-align: center;
         }
-
-        /* The Play Button Styling */
-        #play-button {
-            padding: 20px 60px;
-            font-size: 2.5rem;
-            font-family: inherit; /* Inherit the cool font */
-            color: white;
-            background-color: #4CAF50; /* Mini Militia Green */
-            border: 5px solid #2E7D32; /* Darker green border */
-            border-radius: 12px;
-            cursor: pointer;
-            /* 3D bottom shadow effect */
-            box-shadow: 0 8px #1B5E20; 
-            transition: all 0.1s ease;
-            text-transform: uppercase;
-        }
-
-        /* Button Hover State */
-        #play-button:hover {
-            background-color: #5cb860;
-        }
-
-        /* Button "Clicked" State (Pushes down) */
-        #play-button:active {
-            box-shadow: 0 2px #1B5E20;
-            transform: translateY(6px);
-        }
-
-        /* Responsive Design for smaller screens */
-        @media (max-width: 768px) {
-            h1.game-title { font-size: 2.5rem; }
-            #play-button { font-size: 1.8rem; padding: 15px 40px; }
+        
+        @media screen and (orientation: portrait) {
+            #rotate-message { display: flex; }
         }
     </style>
 </head>
 <body>
 
-    <div id="overlay-container">
-        <h1 class="game-title">Doodle Army<br>Web Battles</h1>
-        <button id="play-button">PLAY NOW</button>
+    <div class="bg-layer"></div>
+
+    <div id="rotate-message">
+        <h1>Please Rotate<br>Your Device</h1>
+        <p>This game requires Landscape mode.</p>
+        <div style="font-size: 4rem;">↻</div>
     </div>
 
+    <div id="start-screen" class="screen">
+        <h1>Doodle Army<br>Web Battles</h1>
+        <button id="btn-start" class="btn-action">TAP TO START</button>
+    </div>
 
-    <script>
-        // Get elements
-        const playBtn = document.getElementById('play-button');
-        const documentElem = document.documentElement; // The entire <html> element
+    <div id="lobby-screen" class="screen hidden">
+        <h1>Soldier Setup</h1>
+        <input type="text" id="input-name" placeholder="YOUR NAME" maxlength="10">
+        <input type="text" id="input-room" placeholder="ROOM NAME (e.g. WARZONE)" maxlength="12">
+        <button id="btn-join" class="btn-action">JOIN BATTLE</button>
+        <p id="status-msg" style="color: yellow; margin-top: 15px;"></p>
+    </div>
 
-        // --- Fullscreen Helper Function ---
-        // This handles different browser prefixes (Chrome, Safari, IE, Firefox)
-        function activateFullscreen() {
-            if (documentElem.requestFullscreen) {
-                documentElem.requestFullscreen();
-            } else if (documentElem.mozRequestFullScreen) { /* Firefox */
-                documentElem.mozRequestFullScreen();
-            } else if (documentElem.webkitRequestFullscreen) { /* Chrome, Safari & Opera */
-                documentElem.webkitRequestFullscreen();
-            } else if (documentElem.msRequestFullscreen) { /* IE/Edge */
-                documentElem.msRequestFullscreen();
+    <div id="game-screen" class="screen hidden" style="background: rgba(0,0,0,0.1);">
+        <h1 id="game-loading-text">CONNECTING TO SATELLITE...</h1>
+    </div>
+
+    <script type="module">
+        // 1. IMPORT FIREBASE (V12.7.0)
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js";
+        // We added 'firebase-database.js' here because your snippet was missing it!
+        import { getDatabase, ref, get, set, child } from "https://www.gstatic.com/firebasejs/12.7.0/firebase-database.js";
+
+        // 2. YOUR CONFIGURATION
+        const firebaseConfig = {
+            apiKey: "AIzaSyBv36GemaSD-sMRUKjNdwkMiLyPv8-kOMI",
+            authDomain: "mini-militia-online.firebaseapp.com",
+            projectId: "mini-militia-online",
+            storageBucket: "mini-militia-online.firebasestorage.app",
+            messagingSenderId: "1042367396622",
+            appId: "1:1042367396622:web:271681c7160b559807b55f",
+            measurementId: "G-SH0F9B6TQD"
+        };
+
+        // 3. INITIALIZE
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+        console.log("Firebase v12 Initialized!");
+
+        // --- DOM ELEMENTS ---
+        const startScreen = document.getElementById('start-screen');
+        const lobbyScreen = document.getElementById('lobby-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const btnStart = document.getElementById('btn-start');
+        const btnJoin = document.getElementById('btn-join');
+        const statusMsg = document.getElementById('status-msg');
+
+        // --- START BUTTON LOGIC ---
+        btnStart.addEventListener('click', () => {
+            const docEl = document.documentElement;
+            if (docEl.requestFullscreen) docEl.requestFullscreen().catch(err => console.log(err));
+            
+            // Basic orientation lock attempt
+            if (screen.orientation && screen.orientation.lock) {
+                screen.orientation.lock('landscape').catch(() => {});
             }
-        }
 
-        // --- Click Event Listener ---
-        playBtn.addEventListener('click', function() {
-            // 1. Trigger Fullscreen immediately on user click
-            activateFullscreen();
-
-            // 2. Provide visual feedback
-            playBtn.innerText = "LOADING...";
-            playBtn.style.backgroundColor = "#888";
-            playBtn.style.boxShadow = "none";
-            playBtn.style.transform = "translateY(6px)";
-            playBtn.disabled = true;
-
-            console.log("Fullscreen requested. Transitioning to next state...");
-
-            // --- NEXT STEPS FOR LATER ---
-            // In the future, this is where you will hide the #overlay-container
-            // and show your Lobby HTML container. For now, we just stay here.
+            startScreen.classList.add('hidden');
+            lobbyScreen.classList.remove('hidden');
         });
 
+        // --- JOIN BUTTON LOGIC (Using Modular SDK) ---
+        btnJoin.addEventListener('click', () => {
+            const name = document.getElementById('input-name').value.trim();
+            const room = document.getElementById('input-room').value.trim();
+
+            if (!name || !room) {
+                statusMsg.innerText = "NAME AND ROOM ARE REQUIRED!";
+                return;
+            }
+
+            // Lock UI
+            btnJoin.disabled = true;
+            btnJoin.innerText = "CONNECTING...";
+            statusMsg.innerText = "Contacting Firebase...";
+
+            const roomRef = ref(db, 'rooms/' + room);
+
+            // CHECK IF ROOM EXISTS
+            get(roomRef).then((snapshot) => {
+                if (snapshot.exists()) {
+                    console.log("Room exists. Joining...");
+                    enterGame(room, name, false);
+                } else {
+                    console.log("Room does not exist. Creating...");
+                    enterGame(room, name, true);
+                }
+            }).catch((error) => {
+                console.error(error);
+                btnJoin.disabled = false;
+                btnJoin.innerText = "JOIN BATTLE";
+                statusMsg.innerText = "Error: " + error.message;
+            });
+        });
+
+        // --- ENTER GAME FUNCTION ---
+        function enterGame(roomName, playerName, isCreator) {
+            const myPlayerId = 'soldier_' + Math.floor(Math.random() * 100000);
+            
+            // Store data globally so other scripts can access it later
+            window.gameData = {
+                room: roomName,
+                name: playerName,
+                id: myPlayerId,
+                isHost: isCreator,
+                db: db // Pass the database instance
+            };
+
+            // Write player to DB
+            set(ref(db, 'rooms/' + roomName + '/players/' + myPlayerId), {
+                name: playerName,
+                x: 100,
+                y: 100,
+                online: true
+            }).then(() => {
+                lobbyScreen.classList.add('hidden');
+                gameScreen.classList.remove('hidden');
+                document.getElementById('game-loading-text').innerText = 
+                    isCreator ? "DEPLOYING TO " + roomName : "JOINING " + roomName;
+                
+                console.log("SUCCESS! Ready for Phaser Game Loop.");
+            }).catch((err) => {
+                statusMsg.innerText = "Write Failed: " + err.message;
+                btnJoin.disabled = false;
+            });
+        }
     </script>
 </body>
 </html>
