@@ -1,5 +1,5 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getDatabase, ref, set, push, onChildAdded, onChildRemoved, remove, onDisconnect, runTransaction, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+import { getDatabase, ref, set, push, onChildAdded, onChildRemoved, remove, onDisconnect } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 // --- CONFIG ---
 const firebaseConfig = {
@@ -24,8 +24,7 @@ const db = getDatabase(app);
 
 // --- STATE ---
 let ROOM_ID, MY_ID, MY_NAME;
-let AM_I_HOST = false;
-const peers = {}; // Stores active connections
+const peers = {}; // Stores active connections: { "player_id": { conn, channel } }
 
 // --- EXPORTED FUNCTIONS ---
 
@@ -34,38 +33,13 @@ export function startNetwork(roomId, myId, myName) {
     MY_ID = myId;
     MY_NAME = myName;
 
-    // 1. Determine Role
-    runTransaction(ref(db, `rooms/${ROOM_ID}/hostID`), (current) => {
-        if (current === null) return MY_ID;
-        if (current === MY_ID) return MY_ID;
-        return undefined; 
-    }).then((result) => {
-        AM_I_HOST = result.committed;
-        
-        if (AM_I_HOST) {
-            updateUI("HOST", "blue", "WAITING FOR CLIENT...");
-            const hostRef = ref(db, `rooms/${ROOM_ID}/hostID`);
-            set(hostRef, MY_ID);
-            onDisconnect(hostRef).remove();
-        } else {
-            updateUI("CLIENT", "yellow", "SEARCHING FOR HOST...");
-            // Auto-Connect Listener
-            onValue(ref(db, `rooms/${ROOM_ID}/hostID`), (snap) => {
-                const targetHostId = snap.val();
-                if (targetHostId) {
-                    console.log(`Host Found: ${targetHostId}. Auto-Calling...`);
-                    startWebRTC(targetHostId, true);
-                }
-            });
-        }
-        
-        // 2. Start Signaling Listener
-        initSignaling();
-    });
+    updateStatus("CONNECTING TO MESH...");
+    initSignaling();
 }
 
 export function broadcastData(data) {
     const packet = JSON.stringify(data);
+    // Send to ALL connected peers
     Object.values(peers).forEach(p => {
         if(p.channel && p.channel.readyState === 'open') {
             p.channel.send(packet);
@@ -76,21 +50,42 @@ export function broadcastData(data) {
 // --- INTERNAL LOGIC ---
 
 function initSignaling() {
-    console.log("Signaling Active.");
-    remove(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`)); // Clean start
+    console.log("Initializing Mesh Signaling...");
+    
+    // 1. Clean my mailbox
+    remove(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`)); 
 
-    // Presence
+    // 2. Register Presence
     const myRef = ref(db, `rooms/${ROOM_ID}/players/${MY_ID}`);
     set(myRef, { online: true, name: MY_NAME });
     onDisconnect(myRef).remove();
 
-    // Incoming Signals
+    // 3. LISTEN FOR PLAYERS (Mesh Discovery)
+    onChildAdded(ref(db, `rooms/${ROOM_ID}/players`), (snapshot) => {
+        const peerId = snapshot.key;
+        if (peerId === MY_ID) return; // Ignore myself
+
+        console.log(`Discovered Peer: ${peerId}`);
+
+        // --- MESH LOGIC: PREVENT COLLISIONS ---
+        // If My ID is "Alphabetically Greater" than theirs, I initiate the call.
+        // If smaller, I do nothing and wait for them to call me.
+        if (MY_ID > peerId) {
+            console.log(`I am initiating call to ${peerId} (My ID is larger)`);
+            startWebRTC(peerId, true);
+        } else {
+            console.log(`Waiting for ${peerId} to call me (My ID is smaller)`);
+        }
+    });
+
+    // 4. LISTEN FOR SIGNALS (Offers/Answers)
     onChildAdded(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`), (snapshot) => {
         const data = snapshot.val();
         if (data) handleSignal(data.sender, data.payload);
+        // remove(snapshot.ref); // Keeping for debug, uncomment to clean
     });
 
-    // Instant Disconnect Listener
+    // 5. LISTEN FOR DISCONNECTS
     onChildRemoved(ref(db, `rooms/${ROOM_ID}/players`), (snapshot) => {
         if (snapshot.key !== MY_ID) cleanupPeer(snapshot.key);
     });
@@ -104,20 +99,22 @@ function sendSignal(targetId, payload) {
 }
 
 async function startWebRTC(targetId, isInitiator) {
-    if (peers[targetId]) return;
+    if (peers[targetId]) return; // Already connected
 
+    console.log(`Starting WebRTC with ${targetId}. Initiator: ${isInitiator}`);
     const pc = new RTCPeerConnection(rtcConfig);
     peers[targetId] = { conn: pc, channel: null };
 
+    // Monitor Connection State
     pc.oniceconnectionstatechange = () => {
         const state = pc.iceConnectionState;
-        updateStatus(state.toUpperCase());
-
         if(state === 'disconnected' || state === 'failed' || state === 'closed') {
             cleanupPeer(targetId);
         }
+        updatePeerCount();
     };
 
+    // Data Channel Setup
     if (isInitiator) {
         const channel = pc.createDataChannel("game");
         setupChannel(channel, targetId);
@@ -125,10 +122,12 @@ async function startWebRTC(targetId, isInitiator) {
         pc.ondatachannel = (e) => setupChannel(e.channel, targetId);
     }
 
+    // ICE Candidates
     pc.onicecandidate = (e) => {
         if (e.candidate) sendSignal(targetId, { type: 'candidate', candidate: e.candidate.toJSON() });
     };
 
+    // Negotiation
     if (isInitiator) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -137,35 +136,43 @@ async function startWebRTC(targetId, isInitiator) {
 }
 
 async function handleSignal(senderId, signal) {
+    // If we receive an offer but don't have a PC yet, create one (we are the receiver)
     if (!peers[senderId]) await startWebRTC(senderId, false);
+    
     const pc = peers[senderId].conn;
 
-    if (signal.type === 'offer') {
-        await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        sendSignal(senderId, { type: 'answer', sdp: answer });
-    } else if (signal.type === 'answer') {
-        if (!pc.currentRemoteDescription) await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-    } else if (signal.type === 'candidate') {
-        try { 
+    try {
+        if (signal.type === 'offer') {
+            await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            sendSignal(senderId, { type: 'answer', sdp: answer });
+        } 
+        else if (signal.type === 'answer') {
+            if (!pc.currentRemoteDescription) await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+        } 
+        else if (signal.type === 'candidate') {
             if (pc.remoteDescription) await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-            else await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-        } catch(e) {}
-    }
+            else {
+                // Simple queueing fallback
+                setTimeout(async () => {
+                    if (pc.remoteDescription) await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+                }, 1000);
+            }
+        }
+    } catch(e) { console.error("Signal Error:", e); }
 }
 
 function setupChannel(channel, id) {
     channel.onopen = () => {
-        updateStatus("SYNC ACTIVE", "green");
-        // Trigger global hook for initial spawn
+        console.log(`Channel OPEN with ${id}`);
+        updatePeerCount();
         if (window.onNetworkConnect) window.onNetworkConnect();
     };
     peers[id].channel = channel;
     
     channel.onmessage = (e) => {
         const data = JSON.parse(e.data);
-        // Call global hook defined in game.html
         if (window.onNetworkData) window.onNetworkData(id, data);
     };
 }
@@ -175,25 +182,26 @@ function cleanupPeer(id) {
         peers[id].conn.close();
         delete peers[id];
     }
-    // Call global hook to remove sprite
     if (window.onPeerDisconnect) window.onPeerDisconnect(id);
-    
-    if (AM_I_HOST) updateStatus("WAITING...", "red");
-    else updateStatus("DISCONNECTED", "red");
+    updatePeerCount();
 }
 
-// --- HELPER TO UPDATE HTML UI ---
-function updateUI(role, color, status) {
-    document.getElementById('disp-role').innerText = role;
-    document.getElementById('disp-role').className = color;
-    document.getElementById('disp-status').innerText = status;
-}
-
-function updateStatus(text, color) {
+// --- UI HELPERS ---
+function updateStatus(text) {
     const el = document.getElementById('disp-status');
-    el.innerText = text;
-    if (color) el.className = color;
-    else if (text === "CONNECTED") el.className = "green";
-    else if (text === "CHECKING") el.className = "orange";
-    else el.className = "red";
+    if(el) el.innerText = text;
+}
+
+function updatePeerCount() {
+    const count = Object.keys(peers).length;
+    const el = document.getElementById('disp-status');
+    if(el) {
+        if(count === 0) {
+            el.innerText = "SEARCHING...";
+            el.className = "red";
+        } else {
+            el.innerText = `CONNECTED (${count} PEERS)`;
+            el.className = "green";
+        }
+    }
 }
