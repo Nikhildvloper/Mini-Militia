@@ -1,327 +1,200 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Mini Militia Web - War Room</title>
-    
-    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
-
-    <style>
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; font-family: monospace; color: white; }
-        
-        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
-        
-        #status-panel {
-            position: absolute; top: 10px; left: 10px;
-            background: rgba(0,0,0,0.6); padding: 10px; border: 1px solid #555; pointer-events: auto;
-        }
-        .green { color: #2ecc71; } .red { color: #e74c3c; } .yellow { color: #f1c40f; } .blue { color: #3498db; }
-
-        #host-badge {
-            display: none; background: #e67e22; color: white; 
-            padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-left: 5px;
-        }
-
-        #deploy-screen {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: #222; display: flex; flex-direction: column;
-            justify-content: center; align-items: center; z-index: 100;
-        }
-        #deploy-btn {
-            font-size: 2rem; padding: 20px 40px; background: #27ae60; 
-            color: white; border: none; cursor: pointer; pointer-events: auto;
-            border-bottom: 5px solid #1e8449;
-        }
-        #deploy-msg { margin-top: 15px; color: #aaa; }
-    </style>
+  <title>Video Call</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    /* --- SAME STYLES AS BEFORE --- */
+    html, body { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; background-color: #000; font-family: Arial, sans-serif; }
+    #videoContainer { position: relative; width: 100vw; height: 100vh; background: black; }
+    #remoteVideo { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 100vw; height: 100vh; object-fit: contain; z-index: 1; }
+    #localVideo { position: absolute; bottom: 10%; right: 10%; height: 180px; width: auto; object-fit: contain; border-radius: 12px; border: 2px solid #fff; z-index: 3; background-color: black; }
+    #endCall { position: absolute; bottom: 10%; left: 50%; transform: translateX(-50%); background: transparent; border: none; cursor: pointer; z-index: 4; width: 70px; height: 70px; }
+    #endCall img { width: 100%; height: 100%; object-fit: contain; }
+    #switchCamera { position: absolute; bottom: 10%; right: 40%; z-index: 4; width: 50px; height: 50px; background: rgba(255,255,255,0.15); border: none; border-radius: 50%; color: #fff; font-size: 22px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    #videoQuality { position: absolute; bottom: 10%; left: 40px; z-index: 4; background: rgba(255,255,255,0.15); color: #fff; border: none; font-size: 16px; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+    #roomIdDisplay { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); color: white; background: rgba(0, 0, 0, 0.5); padding: 8px 16px; border-radius: 12px; font-size: 16px; z-index: 5; }
+    #statusOverlay { position: absolute; top: 60px; left: 50%; transform: translateX(-50%); color: #4CAF50; font-weight: bold; z-index: 5; text-shadow: 1px 1px 0 #000; }
+  </style>
 </head>
 <body>
+  <div id="videoContainer">
+    <div id="roomIdDisplay">Room: Loading...</div>
+    <div id="statusOverlay">Connecting...</div>
+    
+    <video id="remoteVideo" autoplay playsinline></video>
+    <video id="localVideo" autoplay muted playsinline></video>
+    
+    <button id="endCall"><img src="https://img.icons8.com/ios-filled/50/ff0000/end-call-male.png" alt="End"></button>
+    <button id="switchCamera" title="Switch Camera">&#8645;</button>
+    
+    <select id="videoQuality">
+      <option value="low" selected>Low</option>
+      <option value="sd">SD</option>
+      <option value="hd">HD</option>
+    </select>
+  </div>
 
-    <div id="deploy-screen">
-        <button id="deploy-btn">DEPLOY SOLDIER</button>
-        <div id="deploy-msg">Checking Host Status...</div>
-    </div>
+  <script type="module">
+    // Using Stable Firebase Version 10.12.2
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import { getFirestore, doc, setDoc, getDoc, updateDoc, deleteDoc, onSnapshot, collection, addDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
-    <div id="ui-layer">
-        <div id="status-panel">
-            <div>
-                PLAYER: <span id="disp-id" class="yellow">...</span>
-                <span id="host-badge">HOST</span>
-            </div>
-            <div>ROLE: <span id="disp-role">UNDEFINED</span></div>
-            <div>STATUS: <span id="disp-status" class="red">DISCONNECTED</span></div>
-        </div>
-    </div>
+    const firebaseConfig = {
+      apiKey: "AIzaSyCRqfvB5bi8jmxNfu5zhVMcwWR0-YIM8ks",
+      authDomain: "video-chat-44584.firebaseapp.com",
+      projectId: "video-chat-44584",
+      storageBucket: "video-chat-44584.appspot.com",
+      messagingSenderId: "598757234224",
+      appId: "1:598757234224:web:1ae7b1d35abafeb7d7bff5"
+    };
 
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-        import { getDatabase, ref, set, push, onChildAdded, remove, onDisconnect, get, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
 
-        // --- CONFIG ---
-        const firebaseConfig = {
-            apiKey: "AIzaSyBv36GemaSD-sMRUKjNdwkMiLyPv8-kOMI",
-            authDomain: "mini-militia-online.firebaseapp.com",
-            databaseURL: "https://mini-militia-online-default-rtdb.asia-southeast1.firebasedatabase.app",
-            projectId: "mini-militia-online",
-            storageBucket: "mini-militia-online.firebasestorage.app",
-            messagingSenderId: "1042367396622",
-            appId: "1:1042367396622:web:271681c7160b559807b55f"
-        };
+    // --- DOM ELEMENTS ---
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const roomIdDisplay = document.getElementById('roomIdDisplay');
+    const statusOverlay = document.getElementById('statusOverlay');
+    
+    // --- STATE ---
+    // Retrieve Room ID from local storage (set by index.html) or prompt
+    const roomId = localStorage.getItem('roomId') || prompt("Enter Room ID:");
+    roomIdDisplay.innerText = `Room: ${roomId}`;
+    
+    let isInitiator = false; // We will determine this dynamically
+    let localStream;
+    let currentVideoDeviceId = null;
+    
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    });
 
-        const app = initializeApp(firebaseConfig);
-        const db = getDatabase(app);
-
-        // --- LOAD SESSION ---
-        const sessionRaw = localStorage.getItem('mm_session');
-        if (!sessionRaw) window.location.href = "index.html";
-        const session = JSON.parse(sessionRaw);
-        
-        const ROOM_ID = session.room;
-        const MY_ID = session.id;
-        const MY_NAME = session.name;
-
-        // --- GLOBALS ---
-        let game, player, cursors, wasd;
-        let otherPlayers = {};
-        const peers = {};
-        let AM_I_HOST = false; // Will be determined dynamically
-        
-        const rtcConfig = {
-            iceServers: [ { urls: 'stun:stun.l.google.com:19302' } ]
-        };
-
-        // --- INITIALIZATION SEQUENCE ---
-        
-        // 1. Determine Role immediately (Host vs Client)
-        determineRole().then(() => {
-            document.getElementById('disp-id').innerText = MY_NAME.substring(0, 10);
-            document.getElementById('deploy-msg').innerText = AM_I_HOST ? "You are the HOST" : "You are a CLIENT";
+    // --- 1. MEDIA SETUP ---
+    async function startMedia() {
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localVideo.srcObject = localStream;
             
-            if (AM_I_HOST) {
-                document.getElementById('host-badge').style.display = "inline-block";
-                document.getElementById('disp-role').innerText = "HOST (Waiting for calls)";
-                document.getElementById('disp-role').className = "blue";
-            } else {
-                document.getElementById('disp-role').innerText = "CLIENT (Will call Host)";
-                document.getElementById('disp-role').className = "yellow";
-            }
+            // Add Tracks to PC
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+        } catch(e) {
+            console.error("Camera Error:", e);
+            alert("Could not access camera/mic.");
+        }
+    }
+
+    // --- 2. SIGNALING LOGIC (AUTO-ROLE) ---
+    async function joinRoom() {
+        const roomRef = doc(db, 'rooms', roomId);
+        const roomSnap = await getDoc(roomRef);
+
+        if (!roomSnap.exists()) {
+            // CASE 1: ROOM DOES NOT EXIST -> I AM HOST (LISTENER)
+            console.log("Creating Room. I am HOST.");
+            isInitiator = false;
+            statusOverlay.innerText = "Waiting for Client to call...";
+            
+            // Create the room doc so the client can find it
+            await setDoc(roomRef, { created: new Date() });
+            
+            // HOST LOGIC: Listen for OFFER
+            onSnapshot(roomRef, async (snap) => {
+                const data = snap.data();
+                if (!pc.currentRemoteDescription && data && data.offer) {
+                    console.log("Received OFFER from Client");
+                    const offer = data.offer;
+                    
+                    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    
+                    // Send Answer back
+                    await updateDoc(roomRef, { answer: { type: answer.type, sdp: answer.sdp } });
+                }
+            });
+            
+            // Listen for ICE Candidates from Client
+            listenForCandidates(roomId, 'clientCandidates');
+
+        } else {
+            // CASE 2: ROOM EXISTS -> I AM CLIENT (CALLER)
+            console.log("Room found. I am CLIENT.");
+            isInitiator = true;
+            statusOverlay.innerText = "Calling Host...";
+
+            // CLIENT LOGIC: Create OFFER immediately
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            
+            // Send Offer
+            await updateDoc(roomRef, { offer: { type: offer.type, sdp: offer.sdp } });
+
+            // Listen for ANSWER
+            onSnapshot(roomRef, async (snap) => {
+                const data = snap.data();
+                if (!pc.currentRemoteDescription && data && data.answer) {
+                    console.log("Received ANSWER from Host");
+                    const answer = data.answer;
+                    await pc.setRemoteDescription(new RTCSessionDescription(answer));
+                }
+            });
+
+            // Listen for ICE Candidates from Host
+            listenForCandidates(roomId, 'hostCandidates');
+        }
+    }
+
+    // --- 3. ICE CANDIDATES ---
+    pc.onicecandidate = async (event) => {
+        if (event.candidate) {
+            // If I am Initiator (Client), I write to 'clientCandidates'
+            // If I am Host, I write to 'hostCandidates'
+            const collectionName = isInitiator ? 'clientCandidates' : 'hostCandidates';
+            const candidateCol = collection(db, 'rooms', roomId, collectionName);
+            await addDoc(candidateCol, event.candidate.toJSON());
+        }
+    };
+
+    function listenForCandidates(roomId, collectionName) {
+        const candidateCol = collection(db, 'rooms', roomId, collectionName);
+        onSnapshot(candidateCol, (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+                if (change.type === 'added') {
+                    const candidate = new RTCIceCandidate(change.doc.data());
+                    pc.addIceCandidate(candidate);
+                }
+            });
         });
+    }
 
-        async function determineRole() {
-            const hostRef = ref(db, `rooms/${ROOM_ID}/hostID`);
-            
-            // Use Transaction to safely claim Host ID (prevents race conditions)
-            await runTransaction(hostRef, (currentHostID) => {
-                if (currentHostID === null) {
-                    return MY_ID; // Claim it!
-                } else {
-                    return undefined; // Abort, someone else has it
-                }
-            }).then((result) => {
-                if (result.committed) {
-                    AM_I_HOST = true;
-                    // If I disconnect, remove the Host ID so others can claim it later
-                    onDisconnect(hostRef).remove();
-                } else {
-                    AM_I_HOST = false;
-                }
-            });
+    // --- 4. CONNECTION EVENTS ---
+    pc.ontrack = (event) => {
+        remoteVideo.srcObject = event.streams[0];
+        statusOverlay.innerText = "Connected";
+        statusOverlay.style.color = "#00ff00";
+    };
+
+    pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'disconnected') {
+            statusOverlay.innerText = "Disconnected";
+            statusOverlay.style.color = "red";
         }
+    };
 
-        // --- START BUTTON ---
-        document.getElementById('deploy-btn').addEventListener('click', () => {
-            const el = document.documentElement;
-            if (el.requestFullscreen) el.requestFullscreen().catch(()=>{});
-            document.getElementById('deploy-screen').style.display = 'none';
-            
-            initSignaling();
-            initPhaser();
-        });
+    // --- 5. UI CONTROLS ---
+    document.getElementById('endCall').onclick = async () => {
+        // Simple cleanup: delete room and reload
+        try { await deleteDoc(doc(db, "rooms", roomId)); } catch(e){}
+        window.location.href = "index.html"; 
+    };
 
-        // --- SIGNALING ---
-        function initSignaling() {
-            console.log("Connecting to Firebase...");
+    // --- START ---
+    startMedia().then(() => {
+        joinRoom();
+    });
 
-            // 1. Join Room
-            const myRef = ref(db, `rooms/${ROOM_ID}/players/${MY_ID}`);
-            set(myRef, { online: true, name: MY_NAME });
-            onDisconnect(myRef).remove();
-
-            // 2. Peer Discovery Logic
-            const playersRef = ref(db, `rooms/${ROOM_ID}/players`);
-            onChildAdded(playersRef, (snapshot) => {
-                const peerId = snapshot.key;
-                if (peerId === MY_ID) return;
-
-                console.log(`Peer Found: ${peerId}`);
-
-                // --- NEW ROLE-BASED LOGIC ---
-                if (AM_I_HOST) {
-                    // HOST: Do nothing. Sit and wait for the Client to call.
-                    console.log("I am Host. Waiting for offer from Client...");
-                } else {
-                    // CLIENT: Call everyone else (including Host)
-                    console.log("I am Client. Initiating call to...", peerId);
-                    startWebRTC(peerId, true); // True = Initiator
-                }
-            });
-
-            // 3. Listen for Signals (Offers/Answers)
-            onChildAdded(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`), (snapshot) => {
-                const data = snapshot.val();
-                if (data) {
-                    console.log(`Received Signal: ${data.signal.type}`);
-                    handleSignal(data.sender, data.signal);
-                    remove(snapshot.ref);
-                }
-            });
-        }
-
-        // --- WEBRTC CORE ---
-        async function startWebRTC(targetId, isInitiator) {
-            if (peers[targetId]) return;
-
-            const pc = new RTCPeerConnection(rtcConfig);
-            peers[targetId] = { conn: pc, channel: null };
-
-            pc.oniceconnectionstatechange = () => {
-                if(pc.iceConnectionState === 'connected') {
-                    document.getElementById('disp-status').innerText = "CONNECTED";
-                    document.getElementById('disp-status').className = "green";
-                }
-            };
-
-            // Data Channel Setup
-            if (isInitiator) {
-                const channel = pc.createDataChannel("game");
-                setupChannel(channel, targetId);
-            } else {
-                pc.ondatachannel = (e) => setupChannel(e.channel, targetId);
-            }
-
-            // ICE Candidates
-            pc.onicecandidate = (e) => {
-                if (e.candidate) sendSignal(targetId, { type: 'candidate', candidate: e.candidate });
-            };
-
-            // Offer / Answer Exchange
-            if (isInitiator) {
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
-                sendSignal(targetId, { type: 'offer', sdp: offer });
-            }
-        }
-
-        async function handleSignal(senderId, signal) {
-            // If I receive an Offer, I must create a connection to handle it (I am the listener)
-            if (!peers[senderId]) await startWebRTC(senderId, false);
-            
-            const pc = peers[senderId].conn;
-
-            if (signal.type === 'offer') {
-                await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                sendSignal(senderId, { type: 'answer', sdp: answer });
-            } else if (signal.type === 'answer') {
-                await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-            } else if (signal.type === 'candidate') {
-                try { await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)); } catch(e){}
-            }
-        }
-
-        function sendSignal(target, payload) {
-            push(ref(db, `rooms/${ROOM_ID}/signals/${target}`), {
-                sender: MY_ID,
-                signal: payload
-            });
-        }
-
-        function setupChannel(channel, id) {
-            channel.onopen = () => console.log("Data Channel OPEN");
-            peers[id].channel = channel;
-            
-            channel.onmessage = (e) => {
-                const data = JSON.parse(e.data);
-                if (otherPlayers[id]) {
-                    otherPlayers[id].targetX = data.x;
-                    otherPlayers[id].targetY = data.y;
-                } else {
-                    spawnEnemy(id, data.x, data.y);
-                }
-            };
-        }
-
-        // --- PHASER ENGINE ---
-        function initPhaser() {
-            game = new Phaser.Game({
-                type: Phaser.AUTO,
-                scale: { mode: Phaser.Scale.RESIZE, parent: document.body },
-                backgroundColor: '#2c3e50',
-                physics: { default: 'arcade', arcade: { gravity: { y: 0 } } },
-                scene: { preload, create, update }
-            });
-        }
-
-        function preload() {
-            const g = this.make.graphics({x:0, y:0, add:false});
-            
-            // Visual diff: Host (Blue), Client (Green)
-            const color = AM_I_HOST ? 0x3498db : 0x2ecc71;
-            g.fillStyle(color); g.fillRect(0,0,32,32); g.generateTexture('me', 32, 32);
-            
-            // Enemy is Red
-            g.fillStyle(0xe74c3c); g.fillRect(0,0,32,32); g.generateTexture('enemy', 32, 32);
-        }
-
-        function create() {
-            const self = this;
-            this.add.grid(0,0,2000,2000,50,50,0x000000).setAlpha(0.2);
-            this.physics.world.setBounds(-1000, -1000, 2000, 2000);
-
-            // Spawn Player
-            player = this.physics.add.sprite(Math.random()*200, Math.random()*200, 'me');
-            player.setCollideWorldBounds(true);
-            player.setDrag(150);
-            player.setMaxVelocity(400);
-
-            this.cameras.main.startFollow(player);
-
-            cursors = this.input.keyboard.createCursorKeys();
-            wasd = this.input.keyboard.addKeys('W,A,S,D');
-
-            // Global Spawn
-            window.spawnEnemy = (id, x, y) => {
-                const e = self.add.sprite(x, y, 'enemy');
-                e.targetX = x; e.targetY = y;
-                otherPlayers[id] = e;
-            };
-        }
-
-        function update() {
-            if(!player) return;
-            
-            let ax=0, ay=0; const speed=600;
-            if (cursors.left.isDown || wasd.A.isDown) ax=-speed;
-            else if (cursors.right.isDown || wasd.D.isDown) ax=speed;
-            if (cursors.up.isDown || wasd.W.isDown) ay=-speed;
-            else if (cursors.down.isDown || wasd.S.isDown) ay=speed;
-            
-            player.setAcceleration(ax, ay);
-
-            // Sync
-            const packet = JSON.stringify({x: Math.round(player.x), y: Math.round(player.y)});
-            Object.values(peers).forEach(p => {
-                if(p.channel && p.channel.readyState === 'open') p.channel.send(packet);
-            });
-
-            // Interpolation
-            Object.values(otherPlayers).forEach(e => {
-                e.x = Phaser.Math.Linear(e.x, e.targetX, 0.2);
-                e.y = Phaser.Math.Linear(e.y, e.targetY, 0.2);
-            });
-        }
-    </script>
+  </script>
 </body>
 </html>
