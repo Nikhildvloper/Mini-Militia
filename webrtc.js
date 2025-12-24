@@ -15,7 +15,9 @@ const firebaseConfig = {
 const rtcConfig = {
     iceServers: [
         { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" }
+        { urls: "stun:stun1.l.google.com:19302" },
+        { urls: "stun:stun2.l.google.com:19302" },
+        { urls: "stun:stun3.l.google.com:19302" }
     ]
 };
 
@@ -24,7 +26,9 @@ const db = getDatabase(app);
 
 // --- STATE ---
 let ROOM_ID, MY_ID, MY_NAME;
-const peers = {}; // Stores active connections: { "player_id": { conn, channel } }
+const peers = {}; // Active Connections
+const knownPlayers = new Set(); // Everyone in the room (connected or not)
+let meshHealerInterval = null;
 
 // --- EXPORTED FUNCTIONS ---
 
@@ -33,16 +37,43 @@ export function startNetwork(roomId, myId, myName) {
     MY_ID = myId;
     MY_NAME = myName;
 
-    updateStatus("CONNECTING TO SQUAD...", "yellow");
+    updateStatus("CONNECTING TO MESH...", "yellow");
     initSignaling();
+    
+    // START THE HEALER LOOP (Every 3 Seconds)
+    if (meshHealerInterval) clearInterval(meshHealerInterval);
+    meshHealerInterval = setInterval(checkMeshHealth, 3000);
 }
 
 export function broadcastData(data) {
     const packet = JSON.stringify(data);
-    // Send to ALL connected peers
     Object.values(peers).forEach(p => {
         if(p.channel && p.channel.readyState === 'open') {
             p.channel.send(packet);
+        }
+    });
+}
+
+// --- MESH HEALER (The Fix) ---
+function checkMeshHealth() {
+    // Look at everyone we know is in the room
+    knownPlayers.forEach(peerId => {
+        if (peerId === MY_ID) return;
+
+        // If we are NOT connected to them
+        if (!peers[peerId]) {
+            console.log(`[Mesh Healer] Missing connection to ${peerId}. Retrying...`);
+            
+            // Retry using the Golden Rule (Higher ID calls)
+            if (MY_ID > peerId) {
+                startWebRTC(peerId, true);
+            }
+        }
+        // If we ARE connected but the channel is closed/dead
+        else if (peers[peerId].conn.connectionState === 'failed' || peers[peerId].conn.connectionState === 'disconnected') {
+            console.log(`[Mesh Healer] Dead connection to ${peerId}. Restarting...`);
+            cleanupPeer(peerId); // Kill it first
+            if (MY_ID > peerId) startWebRTC(peerId, true); // Then restart
         }
     });
 }
@@ -52,45 +83,42 @@ export function broadcastData(data) {
 function initSignaling() {
     console.log("Initializing Mesh Signaling...");
     
-    // 1. Clean my mailbox (Remove old signals intended for me)
     remove(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`)); 
 
-    // 2. Register Presence (I am here!)
     const myRef = ref(db, `rooms/${ROOM_ID}/players/${MY_ID}`);
     set(myRef, { online: true, name: MY_NAME });
     onDisconnect(myRef).remove();
 
-    // 3. LISTEN FOR PLAYERS (Mesh Discovery)
+    // 1. DISCOVERY
     const playersRef = ref(db, `rooms/${ROOM_ID}/players`);
     onChildAdded(playersRef, (snapshot) => {
         const peerId = snapshot.key;
-        if (peerId === MY_ID) return; // Ignore myself
+        if (peerId === MY_ID) return;
 
+        // Add to "Known" list for the Healer to track
+        knownPlayers.add(peerId);
         console.log(`Discovered Peer: ${peerId}`);
 
-        // --- THE GOLDEN RULE ---
-        // Prevents collision. Only the player with the "Alphabetically Higher" ID calls.
+        // Initial Attempt
         if (MY_ID > peerId) {
-            console.log(`I am initiating call to ${peerId} (My ID > Theirs)`);
             startWebRTC(peerId, true);
-        } else {
-            console.log(`Waiting for ${peerId} to call me (My ID < Theirs)`);
         }
     });
 
-    // 4. LISTEN FOR SIGNALS (Offers/Answers/Candidates)
+    // 2. SIGNALS
     onChildAdded(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`), (snapshot) => {
         const data = snapshot.val();
         if (data) handleSignal(data.sender, data.payload);
-        
-        // Remove signal after reading to keep DB clean
         remove(snapshot.ref); 
     });
 
-    // 5. LISTEN FOR DISCONNECTS
+    // 3. REMOVAL
     onChildRemoved(playersRef, (snapshot) => {
         const peerId = snapshot.key;
-        if (peerId !== MY_ID) cleanupPeer(peerId);
+        if (peerId !== MY_ID) {
+            knownPlayers.delete(peerId); // Stop trying to heal this connection
+            cleanupPeer(peerId);
+        }
     });
 }
 
@@ -102,22 +130,23 @@ function sendSignal(targetId, payload) {
 }
 
 async function startWebRTC(targetId, isInitiator) {
-    if (peers[targetId]) return; // Already connected
+    if (peers[targetId]) return; 
 
     console.log(`Starting WebRTC with ${targetId}`);
     const pc = new RTCPeerConnection(rtcConfig);
     peers[targetId] = { conn: pc, channel: null };
 
-    // Monitor Connection State
+    // Monitor Connection
     pc.oniceconnectionstatechange = () => {
         const state = pc.iceConnectionState;
         if(state === 'disconnected' || state === 'failed' || state === 'closed') {
-            cleanupPeer(targetId);
+            // Don't delete immediately, let the Healer handle logic or wait for momentary drop
+            // But update UI
+            updatePeerCount();
         }
-        updatePeerCount();
+        if(state === 'connected') updatePeerCount();
     };
 
-    // Data Channel Setup
     if (isInitiator) {
         const channel = pc.createDataChannel("game");
         setupChannel(channel, targetId);
@@ -125,12 +154,10 @@ async function startWebRTC(targetId, isInitiator) {
         pc.ondatachannel = (e) => setupChannel(e.channel, targetId);
     }
 
-    // ICE Candidates
     pc.onicecandidate = (e) => {
         if (e.candidate) sendSignal(targetId, { type: 'candidate', candidate: e.candidate.toJSON() });
     };
 
-    // Negotiation
     if (isInitiator) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -139,27 +166,39 @@ async function startWebRTC(targetId, isInitiator) {
 }
 
 async function handleSignal(senderId, signal) {
-    // If we receive an offer but don't have a PC yet, create one (we are the receiver)
     if (!peers[senderId]) await startWebRTC(senderId, false);
-    
     const pc = peers[senderId].conn;
 
     try {
         if (signal.type === 'offer') {
-            await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+            // Collision handling: If we are already connected or connecting, ignore lower-ID offers
+            // But since we follow Golden Rule strictly, this is just a standard accept.
+            if (pc.signalingState !== "stable") {
+                // If we are in "glare", rollback could be needed, but usually simplified logic holds up.
+                await Promise.all([
+                    pc.setLocalDescription({type: "rollback"}),
+                    pc.setRemoteDescription(new RTCSessionDescription(signal.sdp))
+                ]);
+            } else {
+                await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+            }
+            
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             sendSignal(senderId, { type: 'answer', sdp: answer });
         } 
         else if (signal.type === 'answer') {
-            if (!pc.currentRemoteDescription) await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+            if (pc.signalingState === "have-local-offer") {
+                await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+            }
         } 
         else if (signal.type === 'candidate') {
-            if (pc.remoteDescription) await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-            else {
-                // Buffer candidate if remote desc isn't ready
+            // Queue candidate if remote desc not ready
+            if (pc.remoteDescription && pc.remoteDescription.type) {
+                await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+            } else {
                 setTimeout(async () => {
-                    if (pc.remoteDescription) await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+                     if (pc.remoteDescription) await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
                 }, 1000);
             }
         }
@@ -189,24 +228,20 @@ function cleanupPeer(id) {
     updatePeerCount();
 }
 
-// --- UI HELPERS ---
-function updateStatus(text, color) {
-    const el = document.getElementById('disp-status');
-    if(el) {
-        el.innerText = text;
-        el.className = color || "white";
-    }
-}
-
 function updatePeerCount() {
-    const count = Object.keys(peers).length;
+    // Count only OPEN channels (Active players)
+    let activeCount = 0;
+    Object.values(peers).forEach(p => {
+        if (p.channel && p.channel.readyState === 'open') activeCount++;
+    });
+
     const el = document.getElementById('disp-status');
     if(el) {
-        if(count === 0) {
-            el.innerText = "SEARCHING FOR SQUAD...";
+        if(activeCount === 0) {
+            el.innerText = "SEARCHING...";
             el.className = "red";
         } else {
-            el.innerText = `CONNECTED (${count} PEERS)`;
+            el.innerText = `SQUAD: ${activeCount + 1} MEMBERS`; // +1 includes Me
             el.className = "green";
         }
     }
