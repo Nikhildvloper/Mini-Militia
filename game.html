@@ -3,21 +3,361 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Warzone - Live</title>
-    <link rel="stylesheet" href="game.css">
+    <title>Warzone - Live Battle</title>
     
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+
+    <style>
+        /* --- CSS INSIDE --- */
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            overflow: hidden; background-color: #000;
+            font-family: 'Arial Black', sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* UI OVERLAY */
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; /* Click through to game */
+            z-index: 10;
+        }
+
+        #ping-display {
+            position: absolute; top: 10px; left: 10px;
+            color: #0f0; font-size: 12px; font-family: monospace;
+        }
+
+        /* "CLICK TO START" OVERLAY (Required for Fullscreen API) */
+        #deploy-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9);
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            z-index: 100;
+            cursor: pointer;
+        }
+        
+        #deploy-btn {
+            font-size: 3rem; color: white; border: 5px solid #4CAF50;
+            padding: 20px 50px; background: #1B5E20; text-transform: uppercase;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        /* MOBILE CONTROLS (Hidden on desktop usually, but useful here) */
+        .touch-zone {
+            position: absolute; bottom: 50px; width: 150px; height: 150px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 50%; pointer-events: auto;
+            border: 2px solid rgba(255,255,255,0.3);
+        }
+        #stick-left { left: 50px; }
+        #stick-right { right: 50px; }
+    </style>
 </head>
 <body>
 
-    <div id="ui-layer">
-        <div id="health-bar-container">
-            <div id="health-fill"></div>
-        </div>
-        <div id="ammo-counter">AMMO: ∞</div>
-        <button id="btn-exit">EXIT MATCH</button>
+    <div id="deploy-overlay">
+        <div id="deploy-btn">TAP TO DEPLOY</div>
+        <div style="color: #888; margin-top: 10px;">Establishing Uplink...</div>
     </div>
 
-    <script type="module" src="game-client.js"></script>
+    <div id="ui-layer">
+        <div id="ping-display">P2P: DISCONNECTED</div>
+        </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import { getDatabase, ref, set, onValue, push, onChildAdded, remove, onDisconnect } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+        // --- 1. CONFIGURATION ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyBv36GemaSD-sMRUKjNdwkMiLyPv8-kOMI",
+            authDomain: "mini-militia-online.firebaseapp.com",
+            databaseURL: "https://mini-militia-online-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "mini-militia-online",
+            storageBucket: "mini-militia-online.firebasestorage.app",
+            messagingSenderId: "1042367396622",
+            appId: "1:1042367396622:web:271681c7160b559807b55f"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        // --- 2. SESSION CHECK ---
+        const sessionRaw = localStorage.getItem('mm_session');
+        if (!sessionRaw) {
+            alert("No Session Found! Redirecting to menu.");
+            window.location.href = "index.html";
+        }
+        const session = JSON.parse(sessionRaw);
+        const ROOM_ID = session.room;
+        const MY_ID = session.id;
+        const MY_NAME = session.name;
+
+        // --- 3. GLOBAL VARIABLES ---
+        let game;
+        let player;
+        let cursors, wasd;
+        let otherPlayers = {}; // Stores Phaser Sprites
+        const peers = {}; // Stores WebRTC Connections: { peerId: { conn, channel } }
+        
+        // ICE Servers (Google's free STUN servers)
+        const rtcConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+
+        // --- 4. FULLSCREEN & START HANDLER ---
+        document.getElementById('deploy-overlay').addEventListener('click', function() {
+            const el = document.documentElement;
+            if (el.requestFullscreen) el.requestFullscreen().catch(()=>{});
+            
+            // Lock Landscape
+            if (screen.orientation && screen.orientation.lock) {
+                screen.orientation.lock('landscape').catch(()=>{});
+            }
+
+            this.style.display = 'none'; // Hide overlay
+            startGame(); // Launch Phaser
+        });
+
+
+        // --- 5. WEBRTC SIGNALING LOGIC ---
+        function initSignaling() {
+            const signalsRef = ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`);
+            
+            // Listen for incoming signals (Offers/Answers/Candidates)
+            onChildAdded(signalsRef, (snapshot) => {
+                const data = snapshot.val();
+                const senderId = data.sender;
+                const signal = data.signal;
+
+                handleSignal(senderId, signal);
+                
+                // Delete signal after reading to keep DB clean
+                remove(snapshot.ref);
+            });
+
+            // Detect NEW players joining to initiate connection
+            const playersRef = ref(db, `rooms/${ROOM_ID}/players`);
+            onChildAdded(playersRef, (snapshot) => {
+                const newPeerId = snapshot.key;
+                if (newPeerId !== MY_ID) {
+                    console.log("New Player Detected:", newPeerId);
+                    // If I am already in the room and they join, I initiate.
+                    // (Simple logic: compare IDs alphabetically to decide who initiates to avoid collision)
+                    if (MY_ID < newPeerId) {
+                        createPeerConnection(newPeerId, true);
+                    } else {
+                        createPeerConnection(newPeerId, false);
+                    }
+                }
+            });
+        }
+
+        async function createPeerConnection(targetId, isInitiator) {
+            if (peers[targetId]) return; // Already connected
+
+            console.log(`Creating RTC connection to ${targetId}. Initiator: ${isInitiator}`);
+            const pc = new RTCPeerConnection(rtcConfig);
+            let dataChannel;
+
+            // 1. DATA CHANNEL SETUP
+            if (isInitiator) {
+                // Initiator creates the channel
+                dataChannel = pc.createDataChannel("gameData");
+                setupDataChannel(dataChannel, targetId);
+            } else {
+                // Receiver waits for channel
+                pc.ondatachannel = (event) => {
+                    dataChannel = event.channel;
+                    setupDataChannel(dataChannel, targetId);
+                };
+            }
+
+            peers[targetId] = { conn: pc, channel: null };
+
+            // 2. ICE CANDIDATES
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    sendSignal(targetId, { type: 'candidate', candidate: event.candidate });
+                }
+            };
+
+            // 3. NEGOTIATION (Offer/Answer)
+            if (isInitiator) {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                sendSignal(targetId, { type: 'offer', sdp: offer });
+            }
+
+            peers[targetId].conn = pc;
+        }
+
+        async function handleSignal(senderId, signal) {
+            if (!peers[senderId]) {
+                await createPeerConnection(senderId, false);
+            }
+            
+            const pc = peers[senderId].conn;
+
+            if (signal.type === 'offer') {
+                await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                sendSignal(senderId, { type: 'answer', sdp: answer });
+            
+            } else if (signal.type === 'answer') {
+                await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+            
+            } else if (signal.type === 'candidate') {
+                try {
+                    await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+                } catch (e) {
+                    console.error("Error adding Ice Candidate", e);
+                }
+            }
+        }
+
+        function sendSignal(targetId, signalPayload) {
+            push(ref(db, `rooms/${ROOM_ID}/signals/${targetId}`), {
+                sender: MY_ID,
+                signal: signalPayload
+            });
+        }
+
+        function setupDataChannel(channel, peerId) {
+            channel.onopen = () => {
+                console.log(`WebRTC Data Channel OPEN with ${peerId}`);
+                document.getElementById('ping-display').innerText = "P2P: CONNECTED (Active)";
+                document.getElementById('ping-display').style.color = "#00ff00";
+                if(peers[peerId]) peers[peerId].channel = channel;
+            };
+            
+            channel.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                // WEBRTC UPDATE LOOP
+                if (otherPlayers[peerId]) {
+                    otherPlayers[peerId].targetX = data.x;
+                    otherPlayers[peerId].targetY = data.y;
+                } else {
+                    // Spawn if not exists
+                    spawnEnemy(peerId, data.x, data.y);
+                }
+            };
+        }
+
+        // --- 6. PHASER GAME LOGIC ---
+        function startGame() {
+            // Init WebRTC listeners
+            initSignaling();
+
+            const config = {
+                type: Phaser.AUTO,
+                scale: {
+                    mode: Phaser.Scale.RESIZE, // Auto Resize to Fullscreen
+                    parent: document.body,
+                    width: '100%',
+                    height: '100%'
+                },
+                backgroundColor: '#2c3e50',
+                physics: {
+                    default: 'arcade',
+                    arcade: { gravity: { y: 0 }, debug: false }
+                },
+                scene: { preload, create, update }
+            };
+
+            game = new Phaser.Game(config);
+        }
+
+        function preload() {
+            const g = this.make.graphics({ x: 0, y: 0, add: false });
+
+            // Textures
+            g.fillStyle(0x4CAF50); g.fillRect(0, 0, 40, 40);
+            g.generateTexture('soldier', 40, 40);
+
+            g.fillStyle(0xE74C3C); g.fillRect(0, 0, 40, 40);
+            g.generateTexture('enemy', 40, 40);
+        }
+
+        function create() {
+            const self = this;
+            
+            // World
+            this.physics.world.setBounds(0, 0, 2000, 2000);
+            this.add.grid(1000, 1000, 2000, 2000, 50, 50, 0x000000).setAlpha(0.2);
+
+            // Player
+            player = this.physics.add.sprite(Math.random()*500, Math.random()*500, 'soldier');
+            player.setCollideWorldBounds(true);
+            player.setDrag(200);
+            player.setMaxVelocity(400);
+
+            // Camera
+            this.cameras.main.startFollow(player);
+            this.cameras.main.setZoom(1);
+
+            // Controls
+            cursors = this.input.keyboard.createCursorKeys();
+            wasd = this.input.keyboard.addKeys('W,A,S,D');
+
+            // Handle Disconnect logic
+            const myRef = ref(db, `rooms/${ROOM_ID}/players/${MY_ID}`);
+            onDisconnect(myRef).remove();
+            
+            // Expose spawn function globally for the WebRTC callback
+            window.spawnEnemy = (id, x, y) => {
+                if(otherPlayers[id]) return;
+                const enemy = self.add.sprite(x, y, 'enemy');
+                enemy.targetX = x;
+                enemy.targetY = y;
+                otherPlayers[id] = enemy;
+            };
+        }
+
+        function update() {
+            if (!player) return;
+
+            // 1. MOVEMENT (Zero G)
+            let accX = 0; let accY = 0;
+            const speed = 600;
+
+            if (cursors.left.isDown || wasd.A.isDown) accX = -speed;
+            else if (cursors.right.isDown || wasd.D.isDown) accX = speed;
+
+            if (cursors.up.isDown || wasd.W.isDown) accY = -speed;
+            else if (cursors.down.isDown || wasd.S.isDown) accY = speed;
+
+            player.setAcceleration(accX, accY);
+
+            // 2. BROADCAST VIA WEBRTC
+            // Send 30 times a second to save bandwidth, or every frame if desired
+            const posData = JSON.stringify({ x: Math.round(player.x), y: Math.round(player.y) });
+            
+            Object.values(peers).forEach(p => {
+                if (p.channel && p.channel.readyState === 'open') {
+                    p.channel.send(posData);
+                }
+            });
+
+            // 3. INTERPOLATE ENEMIES
+            Object.values(otherPlayers).forEach(enemy => {
+                enemy.x = Phaser.Math.Linear(enemy.x, enemy.targetX, 0.2); // Smooth lerp
+                enemy.y = Phaser.Math.Linear(enemy.y, enemy.targetY, 0.2);
+            });
+        }
+    </script>
 </body>
 </html>
