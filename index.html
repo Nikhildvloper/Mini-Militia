@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Doodle Army Web Clone</title>
+    <style>
+        /* --- CSS STYLES --- */
+
+        /* Reset default browser margins and ensure full height */
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden; /* Prevent scrolling */
+            background-color: #000;
+        }
+
+        /* The main background using your generated image */
+        body {
+            /* IMPORTANT: Ensure image_1.png is in the same folder */
+            background-image: url('image_1.png'); 
+            background-position: center center;
+            background-repeat: no-repeat;
+            background-size: cover; /* Ensure image covers entire screen */
+            font-family: 'Arial Black', 'Impact', sans-serif; /* Thick, game-like font */
+        }
+
+        /* A dark overlay to make text readable against the busy background */
+        #overlay-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center; /* Center vertically */
+            align-items: center; /* Center horizontally */
+            background-color: rgba(0, 0, 0, 0.4); /* Semi-transparent black */
+        }
+
+        /* Game Title */
+        h1.game-title {
+            color: #ffffff;
+            font-size: 4rem;
+            text-transform: uppercase;
+            /* A thick black border around text for cartoon effect */
+            text-shadow: 
+                3px 3px 0 #000,
+                -1px -1px 0 #000,  
+                1px -1px 0 #000,
+                -1px 1px 0 #000,
+                1px 1px 0 #000;
+            margin-bottom: 50px;
+            text-align: center;
+        }
+
+        /* The Play Button Styling */
+        #play-button {
+            padding: 20px 60px;
+            font-size: 2.5rem;
+            font-family: inherit; /* Inherit the cool font */
+            color: white;
+            background-color: #4CAF50; /* Mini Militia Green */
+            border: 5px solid #2E7D32; /* Darker green border */
+            border-radius: 12px;
+            cursor: pointer;
+            /* 3D bottom shadow effect */
+            box-shadow: 0 8px #1B5E20; 
+            transition: all 0.1s ease;
+            text-transform: uppercase;
+        }
+
+        /* Button Hover State */
+        #play-button:hover {
+            background-color: #5cb860;
+        }
+
+        /* Button "Clicked" State (Pushes down) */
+        #play-button:active {
+            box-shadow: 0 2px #1B5E20;
+            transform: translateY(6px);
+        }
+
+        /* Responsive Design for smaller screens */
+        @media (max-width: 768px) {
+            h1.game-title { font-size: 2.5rem; }
+            #play-button { font-size: 1.8rem; padding: 15px 40px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="overlay-container">
+        <h1 class="game-title">Doodle Army<br>Web Battles</h1>
+        <button id="play-button">PLAY NOW</button>
+    </div>
+
+
+    <script>
+        // Get elements
+        const playBtn = document.getElementById('play-button');
+        const documentElem = document.documentElement; // The entire <html> element
+
+        // --- Fullscreen Helper Function ---
+        // This handles different browser prefixes (Chrome, Safari, IE, Firefox)
+        function activateFullscreen() {
+            if (documentElem.requestFullscreen) {
+                documentElem.requestFullscreen();
+            } else if (documentElem.mozRequestFullScreen) { /* Firefox */
+                documentElem.mozRequestFullScreen();
+            } else if (documentElem.webkitRequestFullscreen) { /* Chrome, Safari & Opera */
+                documentElem.webkitRequestFullscreen();
+            } else if (documentElem.msRequestFullscreen) { /* IE/Edge */
+                documentElem.msRequestFullscreen();
+            }
+        }
+
+        // --- Click Event Listener ---
+        playBtn.addEventListener('click', function() {
+            // 1. Trigger Fullscreen immediately on user click
+            activateFullscreen();
+
+            // 2. Provide visual feedback
+            playBtn.innerText = "LOADING...";
+            playBtn.style.backgroundColor = "#888";
+            playBtn.style.boxShadow = "none";
+            playBtn.style.transform = "translateY(6px)";
+            playBtn.disabled = true;
+
+            console.log("Fullscreen requested. Transitioning to next state...");
+
+            // --- NEXT STEPS FOR LATER ---
+            // In the future, this is where you will hide the #overlay-container
+            // and show your Lobby HTML container. For now, we just stay here.
+        });
+
+    </script>
+</body>
+</html>
