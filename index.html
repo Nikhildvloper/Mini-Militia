@@ -17,16 +17,16 @@
 
         .bg-layer {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background-image: url('image_1.png'); /* Ensure this image exists! */
+            background-image: url('image_1.png'); 
             background-size: cover; background-position: center;
             z-index: -1;
+            filter: brightness(0.5); /* Darken bg so UI pops */
         }
 
         .screen {
             width: 100%; height: 100%;
             display: flex; flex-direction: column;
             justify-content: center; align-items: center;
-            background-color: rgba(0, 0, 0, 0.6);
             position: absolute; top: 0; left: 0;
             transition: opacity 0.5s;
         }
@@ -38,6 +38,7 @@
             text-shadow: 3px 3px 0 #000; margin-bottom: 20px; text-align: center;
         }
 
+        /* INPUTS & BUTTONS */
         input {
             width: 300px; padding: 15px; margin: 10px;
             font-size: 1.2rem; font-family: inherit;
@@ -57,6 +58,66 @@
         .btn-action:active { transform: translateY(4px); box-shadow: 0 2px #1B5E20; }
         .btn-action:disabled { background-color: #555; border-color: #333; box-shadow: none; }
 
+        /* --- NEW LOBBY UI (Split Screen) --- */
+        #lobby-ui-container {
+            display: flex;
+            width: 80%;
+            height: 70%;
+            background: rgba(0,0,0,0.8);
+            border: 4px solid #444;
+            border-radius: 10px;
+            padding: 20px;
+        }
+
+        /* LEFT SIDE: PLAYER LIST */
+        #player-list-area {
+            flex: 2; /* Takes 66% width */
+            border-right: 2px solid #555;
+            padding-right: 20px;
+            overflow-y: auto;
+        }
+        
+        .player-card {
+            background: #333;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 1.2rem;
+            border-left: 5px solid #888; /* Grey = Not Ready */
+        }
+
+        .player-card.ready {
+            border-left: 5px solid #4CAF50; /* Green = Ready */
+            background: #1B5E20;
+        }
+
+        /* RIGHT SIDE: READY BUTTON */
+        #ready-area {
+            flex: 1; /* Takes 33% width */
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding-left: 20px;
+        }
+
+        #btn-ready {
+            width: 100%;
+            height: 100px;
+            font-size: 2rem;
+            background-color: #d32f2f; /* Red initially */
+            border-color: #b71c1c;
+        }
+        
+        #btn-ready.is-ready {
+            background-color: #4CAF50; /* Green when clicked */
+            border-color: #2E7D32;
+        }
+
+        /* ROTATE MESSAGE */
         #rotate-message {
             display: none; position: fixed; top: 0; left: 0;
             width: 100%; height: 100%; background: #1a1a1a;
@@ -64,7 +125,6 @@
             justify-content: center; align-items: center;
             text-align: center;
         }
-        
         @media screen and (orientation: portrait) {
             #rotate-message { display: flex; }
         }
@@ -76,7 +136,6 @@
 
     <div id="rotate-message">
         <h1>Please Rotate<br>Your Device</h1>
-        <p>This game requires Landscape mode.</p>
         <div style="font-size: 4rem;">↻</div>
     </div>
 
@@ -85,71 +144,73 @@
         <button id="btn-start" class="btn-action">TAP TO START</button>
     </div>
 
-    <div id="lobby-screen" class="screen hidden">
+    <div id="input-screen" class="screen hidden">
         <h1>Soldier Setup</h1>
         <input type="text" id="input-name" placeholder="YOUR NAME" maxlength="10">
-        <input type="text" id="input-room" placeholder="ROOM NAME (e.g. WARZONE)" maxlength="12">
-        <button id="btn-join" class="btn-action">JOIN BATTLE</button>
+        <input type="text" id="input-room" placeholder="ROOM NAME" maxlength="12">
+        <button id="btn-join" class="btn-action">ENTER LOBBY</button>
         <p id="status-msg" style="color: yellow; margin-top: 15px;"></p>
     </div>
 
-    <div id="game-screen" class="screen hidden" style="background: rgba(0,0,0,0.1);">
-        <h1 id="game-loading-text">CONNECTING TO SATELLITE...</h1>
+    <div id="waiting-screen" class="screen hidden">
+        <h2 id="room-title">ROOM: ???</h2>
+        
+        <div id="lobby-ui-container">
+            <div id="player-list-area">
+                <div style="color:#aaa;">Waiting for connection...</div>
+            </div>
+
+            <div id="ready-area">
+                <button id="btn-ready" class="btn-action">NOT READY</button>
+                <p id="ready-status-text" style="margin-top:10px; color:#888;">Click when ready</p>
+            </div>
+        </div>
     </div>
 
     <script type="module">
-        // 1. IMPORT FIREBASE (Stable v10.12.2)
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-        import { getDatabase, ref, get, set, child } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+        // Added 'onValue' to listen for updates in real-time
+        import { getDatabase, ref, get, set, onValue, update } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
-        // 2. YOUR CONFIGURATION (Updated with Asia-Southeast1 URL)
+        // CONFIGURATION
         const firebaseConfig = {
             apiKey: "AIzaSyBv36GemaSD-sMRUKjNdwkMiLyPv8-kOMI",
             authDomain: "mini-militia-online.firebaseapp.com",
-            
-            // --- CRITICAL FIX: YOUR REGION SPECIFIC URL ---
-            databaseURL: "https://mini-militia-online-default-rtdb.asia-southeast1.firebasedatabase.app", 
-            
+            databaseURL: "https://mini-militia-online-default-rtdb.asia-southeast1.firebasedatabase.app",
             projectId: "mini-militia-online",
             storageBucket: "mini-militia-online.firebasestorage.app",
             messagingSenderId: "1042367396622",
-            appId: "1:1042367396622:web:271681c7160b559807b55f",
-            measurementId: "G-SH0F9B6TQD"
+            appId: "1:1042367396622:web:271681c7160b559807b55f"
         };
 
-        // 3. INITIALIZE
-        let app, db;
-        try {
-            app = initializeApp(firebaseConfig);
-            db = getDatabase(app);
-            console.log("Firebase Initialized for Asia-Southeast1");
-        } catch (e) {
-            console.error("Firebase Init Error:", e);
-            document.getElementById('status-msg').innerText = "Init Failed: " + e.message;
-        }
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
 
         // --- DOM ELEMENTS ---
         const startScreen = document.getElementById('start-screen');
-        const lobbyScreen = document.getElementById('lobby-screen');
-        const gameScreen = document.getElementById('game-screen');
+        const inputScreen = document.getElementById('input-screen');
+        const waitingScreen = document.getElementById('waiting-screen');
+        const playerListArea = document.getElementById('player-list-area');
+        
         const btnStart = document.getElementById('btn-start');
         const btnJoin = document.getElementById('btn-join');
+        const btnReady = document.getElementById('btn-ready');
         const statusMsg = document.getElementById('status-msg');
 
-        // --- START BUTTON LOGIC ---
-        btnStart.addEventListener('click', () => {
-            const docEl = document.documentElement;
-            if (docEl.requestFullscreen) docEl.requestFullscreen().catch(err => console.log(err));
-            
-            if (screen.orientation && screen.orientation.lock) {
-                screen.orientation.lock('landscape').catch(() => {});
-            }
+        // STATE
+        let myPlayerId = 'soldier_' + Math.floor(Math.random() * 100000);
+        let currentRoom = "";
+        let isMyReady = false;
 
+        // --- 1. START ---
+        btnStart.addEventListener('click', () => {
+            document.documentElement.requestFullscreen().catch(() => {});
+            if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
             startScreen.classList.add('hidden');
-            lobbyScreen.classList.remove('hidden');
+            inputScreen.classList.remove('hidden');
         });
 
-        // --- JOIN BUTTON LOGIC ---
+        // --- 2. JOIN / CREATE ROOM ---
         btnJoin.addEventListener('click', () => {
             const name = document.getElementById('input-name').value.trim();
             const room = document.getElementById('input-room').value.trim();
@@ -159,73 +220,99 @@
                 return;
             }
 
-            // Lock UI
             btnJoin.disabled = true;
-            btnJoin.innerText = "CONNECTING...";
-            statusMsg.innerText = "Connecting to Asia Server...";
+            statusMsg.innerText = "Connecting...";
 
+            // Check if room exists first
             const roomRef = ref(db, 'rooms/' + room);
-
-            // READ DATABASE
             get(roomRef).then((snapshot) => {
-                if (snapshot.exists()) {
-                    console.log("Room exists. Joining...");
-                    enterGame(room, name, false);
-                } else {
-                    console.log("Room does not exist. Creating...");
-                    enterGame(room, name, true);
-                }
-            }).catch((error) => {
-                console.error("Firebase Read Error:", error);
-                
-                let errorText = "Connection Failed: " + error.message;
-                if (error.code === 'PERMISSION_DENIED') {
-                    errorText = "Error: Database Rules are locked. Go to Firebase Console -> Rules.";
-                } else if (error.message.includes("client is offline")) {
-                    errorText = "Error: Check your internet connection.";
-                }
-                
-                statusMsg.innerText = errorText;
+                enterLobby(room, name);
+            }).catch((err) => {
+                statusMsg.innerText = "Error: " + err.message;
                 btnJoin.disabled = false;
-                btnJoin.innerText = "JOIN BATTLE";
             });
         });
 
-        // --- ENTER GAME FUNCTION ---
-        function enterGame(roomName, playerName, isCreator) {
-            const myPlayerId = 'soldier_' + Math.floor(Math.random() * 100000);
-            
-            // Store global game data
-            window.gameData = {
-                room: roomName,
-                name: playerName,
-                id: myPlayerId,
-                isHost: isCreator,
-                db: db 
-            };
+        // --- 3. ENTER LOBBY & SETUP LISTENERS ---
+        function enterLobby(roomName, playerName) {
+            currentRoom = roomName;
 
-            // Write player data
-            set(ref(db, 'rooms/' + roomName + '/players/' + myPlayerId), {
+            // Update UI
+            inputScreen.classList.add('hidden');
+            waitingScreen.classList.remove('hidden');
+            document.getElementById('room-title').innerText = "ROOM: " + roomName;
+
+            // 1. Add Myself to Database
+            const myRef = ref(db, 'rooms/' + roomName + '/players/' + myPlayerId);
+            set(myRef, {
                 name: playerName,
-                x: 100,
-                y: 100,
+                ready: false,
                 online: true
-            }).then(() => {
-                lobbyScreen.classList.add('hidden');
-                gameScreen.classList.remove('hidden');
-                document.getElementById('game-loading-text').innerText = 
-                    isCreator ? "DEPLOYING TO " + roomName : "JOINING " + roomName;
-                
-                console.log("SUCCESS! Ready for Phase 2.");
-                
-                // --- NEXT STEP HOOK ---
-                // We will load the game.js script here in the next step
-            }).catch((err) => {
-                console.error("Write Error:", err);
-                statusMsg.innerText = "Write Failed: " + err.message;
-                btnJoin.disabled = false;
+            });
+
+            // 2. Remove myself if I close tab (Cleanup)
+            // (Note: onDisconnect requires strict permissions, usually works in basic rules)
+
+            // 3. LISTEN for Player Changes (The Magic Part)
+            const playersRef = ref(db, 'rooms/' + roomName + '/players');
+            
+            onValue(playersRef, (snapshot) => {
+                const data = snapshot.val();
+                renderPlayerList(data);
             });
         }
+
+        // --- 4. RENDER PLAYER LIST ---
+        function renderPlayerList(players) {
+            playerListArea.innerHTML = ""; // Clear list
+            
+            if (!players) return;
+
+            // Loop through all players in DB
+            Object.keys(players).forEach((key) => {
+                const p = players[key];
+                const isMe = (key === myPlayerId);
+                
+                // Create Card HTML
+                const card = document.createElement('div');
+                card.className = "player-card " + (p.ready ? "ready" : "");
+                
+                const readyText = p.ready ? "READY" : "WAITING";
+                const readyColor = p.ready ? "#4CAF50" : "#888";
+
+                card.innerHTML = `
+                    <div>
+                        <strong>${p.name}</strong> ${isMe ? "(YOU)" : ""}
+                    </div>
+                    <div style="color:${readyColor}; font-weight:bold;">
+                        ${readyText}
+                    </div>
+                `;
+                
+                playerListArea.appendChild(card);
+            });
+        }
+
+        // --- 5. HANDLE READY BUTTON ---
+        btnReady.addEventListener('click', () => {
+            // Toggle State
+            isMyReady = !isMyReady;
+
+            // Update UI Button style
+            if (isMyReady) {
+                btnReady.innerText = "READY!";
+                btnReady.classList.add('is-ready');
+            } else {
+                btnReady.innerText = "NOT READY";
+                btnReady.classList.remove('is-ready');
+            }
+
+            // Update Database
+            update(ref(db, 'rooms/' + currentRoom + '/players/' + myPlayerId), {
+                ready: isMyReady
+            });
+        });
+
     </script>
 </body>
 </html>
