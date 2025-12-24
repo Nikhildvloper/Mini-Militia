@@ -9,7 +9,7 @@
 
     <style>
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; font-family: monospace; color: white; }
-        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        #ui-layer { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
         
         #status-panel {
             position: absolute; top: 10px; left: 10px;
@@ -31,8 +31,11 @@
             font-size: 2rem; padding: 20px 40px; background: #27ae60; 
             color: white; border: none; cursor: pointer; pointer-events: auto;
             border-bottom: 5px solid #1e8449; border-radius: 5px;
+            animation: pulse 1.5s infinite;
         }
-        #deploy-btn:active { transform: translateY(4px); border-bottom: 2px solid #1e8449; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
+        
+        #loading-text { display: none; margin-top: 15px; color: #aaa; font-size: 14px; }
 
         .coord-box { margin-top: 10px; border-top: 1px solid #555; padding-top: 5px; font-size: 12px; }
     </style>
@@ -41,14 +44,14 @@
 
     <div id="deploy-screen">
         <button id="deploy-btn">DEPLOY SOLDIER</button>
-        <div style="margin-top:15px; color:#aaa;">System Ready</div>
+        <div id="loading-text">ESTABLISHING UPLINK...</div>
     </div>
 
     <div id="ui-layer">
         <div id="status-panel">
             <div>ME: <span id="disp-id" class="yellow">...</span></div>
-            <div>ROLE: <span id="disp-role">...</span></div>
-            <div>STATUS: <span id="disp-status" class="red">DISCONNECTED</span></div>
+            <div>ROLE: <span id="disp-role">ASSIGNING...</span></div>
+            <div>STATUS: <span id="disp-status" class="red">INITIALIZING</span></div>
             
             <div class="coord-box">
                 <div>MY POS: <span id="my-coords" class="green">0, 0</span></div>
@@ -59,11 +62,11 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-        // Added onChildRemoved to imports
         import { getDatabase, ref, set, push, onChildAdded, onChildRemoved, remove, onDisconnect, runTransaction, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
         function log(msg) { console.log(msg); }
 
+        // --- CONFIG ---
         const firebaseConfig = {
             apiKey: "AIzaSyBv36GemaSD-sMRUKjNdwkMiLyPv8-kOMI",
             authDomain: "mini-militia-online.firebaseapp.com",
@@ -98,63 +101,96 @@
 
         document.getElementById('disp-id').innerText = session.name;
 
-        // --- ROLE DETERMINATION ---
-        runTransaction(ref(db, `rooms/${ROOM_ID}/hostID`), (current) => {
-            if (current === null) return MY_ID;
-            if (current === MY_ID) return MY_ID;
-            return undefined; 
-        }).then((result) => {
-            AM_I_HOST = result.committed;
+        // --- 1. THE TRIGGER ---
+        const deployBtn = document.getElementById('deploy-btn');
+        deployBtn.addEventListener('click', async () => {
+            // A. UI Feedback
+            deployBtn.style.display = 'none';
+            document.getElementById('loading-text').style.display = 'block';
+
+            // B. Fullscreen
+            try {
+                if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
+            } catch(e) {}
+
+            // C. Start The Sequence
+            startDeployment();
+        });
+
+        // --- 2. DEPLOYMENT SEQUENCE ---
+        function startDeployment() {
+            // Determine Role NOW (Not before)
+            runTransaction(ref(db, `rooms/${ROOM_ID}/hostID`), (current) => {
+                if (current === null) return MY_ID;
+                if (current === MY_ID) return MY_ID;
+                return undefined; 
+            }).then((result) => {
+                AM_I_HOST = result.committed;
+                
+                // Show Game UI
+                document.getElementById('deploy-screen').style.display = 'none';
+                document.getElementById('ui-layer').style.display = 'block';
+                
+                if (AM_I_HOST) {
+                    setupHost();
+                } else {
+                    setupClient();
+                }
+
+                // Start Systems
+                initSignaling();
+                initPhaser();
+            });
+        }
+
+        function setupHost() {
+            document.getElementById('disp-role').innerText = "HOST";
+            document.getElementById('disp-role').className = "blue";
+            document.getElementById('disp-status').innerText = "WAITING FOR CLIENT...";
             
-            if (AM_I_HOST) {
-                document.getElementById('disp-role').innerText = "HOST";
-                document.getElementById('disp-role').className = "blue";
-                const hostRef = ref(db, `rooms/${ROOM_ID}/hostID`);
-                set(hostRef, MY_ID);
-                onDisconnect(hostRef).remove();
-            } else {
-                document.getElementById('disp-role').innerText = "CLIENT";
-                document.getElementById('disp-role').className = "yellow";
-                onValue(ref(db, `rooms/${ROOM_ID}/hostID`), (snap) => {
-                    TARGET_HOST_ID = snap.val();
-                    if (TARGET_HOST_ID) {
-                        log(`Host Found: ${TARGET_HOST_ID}. Auto-Calling...`);
-                        startWebRTC(TARGET_HOST_ID, true);
-                    }
-                });
-            }
-        });
+            // Register Host ID
+            const hostRef = ref(db, `rooms/${ROOM_ID}/hostID`);
+            set(hostRef, MY_ID);
+            onDisconnect(hostRef).remove();
+        }
 
-        document.getElementById('deploy-btn').addEventListener('click', async () => {
-            document.documentElement.requestFullscreen().catch(()=>{});
-            document.getElementById('deploy-screen').style.display = 'none';
-            initSignaling();
-            initPhaser();
-        });
+        function setupClient() {
+            document.getElementById('disp-role').innerText = "CLIENT";
+            document.getElementById('disp-role').className = "yellow";
+            document.getElementById('disp-status').innerText = "SEARCHING FOR HOST...";
+            
+            // Listen for Host
+            onValue(ref(db, `rooms/${ROOM_ID}/hostID`), (snap) => {
+                TARGET_HOST_ID = snap.val();
+                if (TARGET_HOST_ID) {
+                    log(`Host Found: ${TARGET_HOST_ID}. Auto-Calling...`);
+                    startWebRTC(TARGET_HOST_ID, true);
+                }
+            });
+        }
 
-        // --- SIGNALING ---
+        // --- 3. SIGNALING ---
         function initSignaling() {
-            log("Signaling Active.");
+            log("Signaling Started.");
+            // Clean old signals
             remove(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`));
 
+            // Announce presence
             const myRef = ref(db, `rooms/${ROOM_ID}/players/${MY_ID}`);
             set(myRef, { online: true, name: session.name });
             onDisconnect(myRef).remove();
 
-            // 1. Listen for Messages
+            // Listen for Messages
             onChildAdded(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`), (snapshot) => {
                 const data = snapshot.val();
-                if (data) {
-                    handleSignal(data.sender, data.payload);
-                }
+                if (data) handleSignal(data.sender, data.payload);
             });
 
-            // 2. Listen for INSTANT DISCONNECTION (The Fix)
-            // If any player leaves the database (tab closed), we know instantly.
+            // INSTANT DISCONNECT LISTENER
             onChildRemoved(ref(db, `rooms/${ROOM_ID}/players`), (snapshot) => {
                 const leftPlayerId = snapshot.key;
                 if (leftPlayerId !== MY_ID) {
-                    log(`Player Left Instantly: ${leftPlayerId}`);
+                    log(`Player Left: ${leftPlayerId}`);
                     cleanupPeer(leftPlayerId);
                 }
             });
@@ -167,7 +203,7 @@
             });
         }
 
-        // --- WEBRTC ---
+        // --- 4. WEBRTC CORE ---
         async function startWebRTC(targetId, isInitiator) {
             if (peers[targetId]) return;
             
@@ -187,7 +223,6 @@
                 } else if (state === 'checking') {
                     statusEl.className = "orange";
                 } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-                    // Backup cleanup (if Firebase didn't catch it first)
                     statusEl.className = "red";
                     cleanupPeer(targetId);
                 }
@@ -211,27 +246,21 @@
             }
         }
 
-        // --- CLEANUP HELPER (Resets Connection) ---
         function cleanupPeer(id) {
-            // Close WebRTC
             if (peers[id]) {
                 peers[id].conn.close();
                 delete peers[id];
-                log("Connection Cleaned.");
             }
-            // Remove Sprite
             if (otherPlayers[id]) {
                 otherPlayers[id].destroy(); 
                 delete otherPlayers[id];
             }
-            // Update UI to "Waiting"
-            document.getElementById('enemy-coords').innerText = "WAITING FOR RECONNECT...";
+            document.getElementById('enemy-coords').innerText = "WAITING...";
             document.getElementById('enemy-coords').className = "red";
             
-            // If I am Host, update status
             if (AM_I_HOST) {
                 const statusEl = document.getElementById('disp-status');
-                statusEl.innerText = "WAITING...";
+                statusEl.innerText = "WAITING FOR CLIENT...";
                 statusEl.className = "red";
             }
         }
@@ -245,7 +274,6 @@
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
                 sendSignal(senderId, { type: 'answer', sdp: answer });
-            
             } else if (signal.type === 'answer') {
                 if (!pc.currentRemoteDescription) {
                     await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
@@ -257,7 +285,7 @@
                     } else {
                          await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
                     }
-                } catch(e) { log("ICE Error"); }
+                } catch(e) {}
             }
         }
 
@@ -290,7 +318,7 @@
             };
         }
 
-        // --- PHASER ---
+        // --- 5. GAME ENGINE ---
         function initPhaser() {
             game = new Phaser.Game({
                 type: Phaser.AUTO,
