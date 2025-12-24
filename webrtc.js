@@ -33,7 +33,7 @@ export function startNetwork(roomId, myId, myName) {
     MY_ID = myId;
     MY_NAME = myName;
 
-    updateStatus("CONNECTING TO MESH...");
+    updateStatus("CONNECTING TO SQUAD...", "yellow");
     initSignaling();
 }
 
@@ -52,42 +52,45 @@ export function broadcastData(data) {
 function initSignaling() {
     console.log("Initializing Mesh Signaling...");
     
-    // 1. Clean my mailbox
+    // 1. Clean my mailbox (Remove old signals intended for me)
     remove(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`)); 
 
-    // 2. Register Presence
+    // 2. Register Presence (I am here!)
     const myRef = ref(db, `rooms/${ROOM_ID}/players/${MY_ID}`);
     set(myRef, { online: true, name: MY_NAME });
     onDisconnect(myRef).remove();
 
     // 3. LISTEN FOR PLAYERS (Mesh Discovery)
-    onChildAdded(ref(db, `rooms/${ROOM_ID}/players`), (snapshot) => {
+    const playersRef = ref(db, `rooms/${ROOM_ID}/players`);
+    onChildAdded(playersRef, (snapshot) => {
         const peerId = snapshot.key;
         if (peerId === MY_ID) return; // Ignore myself
 
         console.log(`Discovered Peer: ${peerId}`);
 
-        // --- MESH LOGIC: PREVENT COLLISIONS ---
-        // If My ID is "Alphabetically Greater" than theirs, I initiate the call.
-        // If smaller, I do nothing and wait for them to call me.
+        // --- THE GOLDEN RULE ---
+        // Prevents collision. Only the player with the "Alphabetically Higher" ID calls.
         if (MY_ID > peerId) {
-            console.log(`I am initiating call to ${peerId} (My ID is larger)`);
+            console.log(`I am initiating call to ${peerId} (My ID > Theirs)`);
             startWebRTC(peerId, true);
         } else {
-            console.log(`Waiting for ${peerId} to call me (My ID is smaller)`);
+            console.log(`Waiting for ${peerId} to call me (My ID < Theirs)`);
         }
     });
 
-    // 4. LISTEN FOR SIGNALS (Offers/Answers)
+    // 4. LISTEN FOR SIGNALS (Offers/Answers/Candidates)
     onChildAdded(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`), (snapshot) => {
         const data = snapshot.val();
         if (data) handleSignal(data.sender, data.payload);
-        // remove(snapshot.ref); // Keeping for debug, uncomment to clean
+        
+        // Remove signal after reading to keep DB clean
+        remove(snapshot.ref); 
     });
 
     // 5. LISTEN FOR DISCONNECTS
-    onChildRemoved(ref(db, `rooms/${ROOM_ID}/players`), (snapshot) => {
-        if (snapshot.key !== MY_ID) cleanupPeer(snapshot.key);
+    onChildRemoved(playersRef, (snapshot) => {
+        const peerId = snapshot.key;
+        if (peerId !== MY_ID) cleanupPeer(peerId);
     });
 }
 
@@ -101,7 +104,7 @@ function sendSignal(targetId, payload) {
 async function startWebRTC(targetId, isInitiator) {
     if (peers[targetId]) return; // Already connected
 
-    console.log(`Starting WebRTC with ${targetId}. Initiator: ${isInitiator}`);
+    console.log(`Starting WebRTC with ${targetId}`);
     const pc = new RTCPeerConnection(rtcConfig);
     peers[targetId] = { conn: pc, channel: null };
 
@@ -154,7 +157,7 @@ async function handleSignal(senderId, signal) {
         else if (signal.type === 'candidate') {
             if (pc.remoteDescription) await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
             else {
-                // Simple queueing fallback
+                // Buffer candidate if remote desc isn't ready
                 setTimeout(async () => {
                     if (pc.remoteDescription) await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
                 }, 1000);
@@ -187,9 +190,12 @@ function cleanupPeer(id) {
 }
 
 // --- UI HELPERS ---
-function updateStatus(text) {
+function updateStatus(text, color) {
     const el = document.getElementById('disp-status');
-    if(el) el.innerText = text;
+    if(el) {
+        el.innerText = text;
+        el.className = color || "white";
+    }
 }
 
 function updatePeerCount() {
@@ -197,7 +203,7 @@ function updatePeerCount() {
     const el = document.getElementById('disp-status');
     if(el) {
         if(count === 0) {
-            el.innerText = "SEARCHING...";
+            el.innerText = "SEARCHING FOR SQUAD...";
             el.className = "red";
         } else {
             el.innerText = `CONNECTED (${count} PEERS)`;
