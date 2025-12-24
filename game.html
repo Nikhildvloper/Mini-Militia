@@ -8,72 +8,57 @@
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
 
     <style>
-        body, html {
-            margin: 0; padding: 0; width: 100%; height: 100%;
-            overflow: hidden; background-color: #000;
-            font-family: 'Arial Black', sans-serif;
-            user-select: none;
-        }
-
-        /* --- UI OVERLAY --- */
-        #ui-layer {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            pointer-events: none; z-index: 10;
-        }
-
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; font-family: monospace; color: white; }
+        
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        
         #status-panel {
             position: absolute; top: 10px; left: 10px;
-            color: #fff; font-size: 14px; font-family: monospace;
-            background: rgba(0,0,0,0.5); padding: 10px; border-radius: 5px;
+            background: rgba(0,0,0,0.6); padding: 10px; border: 1px solid #555; pointer-events: auto;
+        }
+        .green { color: #2ecc71; } .red { color: #e74c3c; } .yellow { color: #f1c40f; } .blue { color: #3498db; }
+
+        #host-badge {
+            display: none; background: #e67e22; color: white; 
+            padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-left: 5px;
         }
 
-        .status-line { margin-bottom: 5px; }
-        .green { color: #0f0; }
-        .red { color: #f00; }
-        .yellow { color: #ff0; }
-
-        /* --- START OVERLAY (Fullscreen Enforcer) --- */
         #deploy-screen {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: url('image_1.png') center/cover; /* Reusing your background */
-            display: flex; flex-direction: column;
-            justify-content: center; align-items: center;
-            z-index: 100;
+            background: #222; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 100;
         }
-        
         #deploy-btn {
-            font-size: 2rem; color: white; 
-            padding: 20px 60px; background: #c0392b; 
-            border: 4px solid #922b21; border-radius: 10px;
-            cursor: pointer; text-transform: uppercase;
-            box-shadow: 0 10px #500;
-            pointer-events: auto;
-            transition: transform 0.1s;
+            font-size: 2rem; padding: 20px 40px; background: #27ae60; 
+            color: white; border: none; cursor: pointer; pointer-events: auto;
+            border-bottom: 5px solid #1e8449;
         }
-        #deploy-btn:active { transform: translateY(5px); box-shadow: 0 5px #500; }
-
+        #deploy-msg { margin-top: 15px; color: #aaa; }
     </style>
 </head>
 <body>
 
     <div id="deploy-screen">
-        <h1 style="color:white; text-shadow: 2px 2px #000;">DEPLOYMENT READY</h1>
-        <div id="deploy-btn">ENTER WARZONE</div>
+        <button id="deploy-btn">DEPLOY SOLDIER</button>
+        <div id="deploy-msg">Checking Host Status...</div>
     </div>
 
     <div id="ui-layer">
         <div id="status-panel">
-            <div class="status-line">ROOM: <span id="disp-room" class="yellow">...</span></div>
-            <div class="status-line">ID: <span id="disp-id" class="yellow">...</span></div>
-            <div class="status-line">P2P STATUS: <span id="disp-status" class="red">WAITING</span></div>
+            <div>
+                PLAYER: <span id="disp-id" class="yellow">...</span>
+                <span id="host-badge">HOST</span>
+            </div>
+            <div>ROLE: <span id="disp-role">UNDEFINED</span></div>
+            <div>STATUS: <span id="disp-status" class="red">DISCONNECTED</span></div>
         </div>
     </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-        import { getDatabase, ref, set, push, onChildAdded, remove, onDisconnect } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+        import { getDatabase, ref, set, push, onChildAdded, remove, onDisconnect, get, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
-        // --- 1. SETUP & CONFIG ---
+        // --- CONFIG ---
         const firebaseConfig = {
             apiKey: "AIzaSyBv36GemaSD-sMRUKjNdwkMiLyPv8-kOMI",
             authDomain: "mini-militia-online.firebaseapp.com",
@@ -87,128 +72,151 @@
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
-        // --- 2. GET LOCAL STORAGE DATA ---
+        // --- LOAD SESSION ---
         const sessionRaw = localStorage.getItem('mm_session');
-        if (!sessionRaw) {
-            alert("Mission Aborted: No credentials found.");
-            window.location.href = "index.html";
-        }
+        if (!sessionRaw) window.location.href = "index.html";
         const session = JSON.parse(sessionRaw);
+        
         const ROOM_ID = session.room;
         const MY_ID = session.id;
         const MY_NAME = session.name;
 
-        // UI Updates
-        document.getElementById('disp-room').innerText = ROOM_ID;
-        document.getElementById('disp-id').innerText = MY_NAME;
-
-        // --- 3. GLOBAL VARS ---
-        let game;
-        let player;
-        let cursors, wasd;
-        let otherPlayers = {}; // Sprite storage
-        const peers = {}; // Connection storage
+        // --- GLOBALS ---
+        let game, player, cursors, wasd;
+        let otherPlayers = {};
+        const peers = {};
+        let AM_I_HOST = false; // Will be determined dynamically
         
         const rtcConfig = {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
-            ]
+            iceServers: [ { urls: 'stun:stun.l.google.com:19302' } ]
         };
 
-        // --- 4. START SEQUENCE ---
-        document.getElementById('deploy-btn').addEventListener('click', function() {
-            // Fullscreen
+        // --- INITIALIZATION SEQUENCE ---
+        
+        // 1. Determine Role immediately (Host vs Client)
+        determineRole().then(() => {
+            document.getElementById('disp-id').innerText = MY_NAME.substring(0, 10);
+            document.getElementById('deploy-msg').innerText = AM_I_HOST ? "You are the HOST" : "You are a CLIENT";
+            
+            if (AM_I_HOST) {
+                document.getElementById('host-badge').style.display = "inline-block";
+                document.getElementById('disp-role').innerText = "HOST (Waiting for calls)";
+                document.getElementById('disp-role').className = "blue";
+            } else {
+                document.getElementById('disp-role').innerText = "CLIENT (Will call Host)";
+                document.getElementById('disp-role').className = "yellow";
+            }
+        });
+
+        async function determineRole() {
+            const hostRef = ref(db, `rooms/${ROOM_ID}/hostID`);
+            
+            // Use Transaction to safely claim Host ID (prevents race conditions)
+            await runTransaction(hostRef, (currentHostID) => {
+                if (currentHostID === null) {
+                    return MY_ID; // Claim it!
+                } else {
+                    return undefined; // Abort, someone else has it
+                }
+            }).then((result) => {
+                if (result.committed) {
+                    AM_I_HOST = true;
+                    // If I disconnect, remove the Host ID so others can claim it later
+                    onDisconnect(hostRef).remove();
+                } else {
+                    AM_I_HOST = false;
+                }
+            });
+        }
+
+        // --- START BUTTON ---
+        document.getElementById('deploy-btn').addEventListener('click', () => {
             const el = document.documentElement;
             if (el.requestFullscreen) el.requestFullscreen().catch(()=>{});
-            if (screen.orientation && screen.orientation.lock) {
-                screen.orientation.lock('landscape').catch(()=>{});
-            }
-
-            // Hide Menu & Start
             document.getElementById('deploy-screen').style.display = 'none';
-            initFirebaseSignaling();
+            
+            initSignaling();
             initPhaser();
         });
 
-        // --- 5. FIREBASE SIGNALING (The Handshake) ---
-        function initFirebaseSignaling() {
-            console.log("Connecting to Firebase Signaling...");
+        // --- SIGNALING ---
+        function initSignaling() {
+            console.log("Connecting to Firebase...");
 
-            // A. Register Myself in the Room
+            // 1. Join Room
             const myRef = ref(db, `rooms/${ROOM_ID}/players/${MY_ID}`);
-            set(myRef, { name: MY_NAME, online: true });
-            onDisconnect(myRef).remove(); // Only remove ME when I leave
+            set(myRef, { online: true, name: MY_NAME });
+            onDisconnect(myRef).remove();
 
-            // B. Listen for New Players (To initiate calls)
+            // 2. Peer Discovery Logic
             const playersRef = ref(db, `rooms/${ROOM_ID}/players`);
             onChildAdded(playersRef, (snapshot) => {
                 const peerId = snapshot.key;
                 if (peerId === MY_ID) return;
 
-                console.log("Player Detected:", peerId);
-                
-                // COLLISION AVOIDANCE:
-                // If My ID is "Alphabetically Smaller" than theirs, I call them.
-                // If theirs is smaller, I wait for them to call me.
-                // This ensures we don't both call each other at the same time.
-                if (MY_ID < peerId) {
-                    console.log("I am initiating connection to", peerId);
-                    startWebRTC(peerId, true); // true = I am Caller
+                console.log(`Peer Found: ${peerId}`);
+
+                // --- NEW ROLE-BASED LOGIC ---
+                if (AM_I_HOST) {
+                    // HOST: Do nothing. Sit and wait for the Client to call.
+                    console.log("I am Host. Waiting for offer from Client...");
                 } else {
-                    console.log("I am waiting for offer from", peerId);
-                    startWebRTC(peerId, false); // false = I am Listener
+                    // CLIENT: Call everyone else (including Host)
+                    console.log("I am Client. Initiating call to...", peerId);
+                    startWebRTC(peerId, true); // True = Initiator
                 }
             });
 
-            // C. Listen for Signals sent TO ME
-            const mySignalsRef = ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`);
-            onChildAdded(mySignalsRef, (snapshot) => {
+            // 3. Listen for Signals (Offers/Answers)
+            onChildAdded(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`), (snapshot) => {
                 const data = snapshot.val();
-                handleSignalMessage(data.sender, data.signal);
-                remove(snapshot.ref); // Delete signal after reading
+                if (data) {
+                    console.log(`Received Signal: ${data.signal.type}`);
+                    handleSignal(data.sender, data.signal);
+                    remove(snapshot.ref);
+                }
             });
         }
 
-        // --- 6. WEBRTC LOGIC (The Pipe) ---
+        // --- WEBRTC CORE ---
         async function startWebRTC(targetId, isInitiator) {
-            if (peers[targetId]) return; // Already connected
+            if (peers[targetId]) return;
 
             const pc = new RTCPeerConnection(rtcConfig);
             peers[targetId] = { conn: pc, channel: null };
 
-            // 1. DATA CHANNEL (Caller creates it)
-            if (isInitiator) {
-                const channel = pc.createDataChannel("game-data");
-                setupChannel(channel, targetId);
-            } else {
-                pc.ondatachannel = (e) => {
-                    setupChannel(e.channel, targetId);
-                };
-            }
-
-            // 2. ICE CANDIDATES (Network Paths)
-            pc.onicecandidate = (e) => {
-                if (e.candidate) {
-                    sendSignal(targetId, { type: 'candidate', candidate: e.candidate });
+            pc.oniceconnectionstatechange = () => {
+                if(pc.iceConnectionState === 'connected') {
+                    document.getElementById('disp-status').innerText = "CONNECTED";
+                    document.getElementById('disp-status').className = "green";
                 }
             };
 
-            // 3. CREATE OFFER (If Caller)
+            // Data Channel Setup
+            if (isInitiator) {
+                const channel = pc.createDataChannel("game");
+                setupChannel(channel, targetId);
+            } else {
+                pc.ondatachannel = (e) => setupChannel(e.channel, targetId);
+            }
+
+            // ICE Candidates
+            pc.onicecandidate = (e) => {
+                if (e.candidate) sendSignal(targetId, { type: 'candidate', candidate: e.candidate });
+            };
+
+            // Offer / Answer Exchange
             if (isInitiator) {
                 const offer = await pc.createOffer();
                 await pc.setLocalDescription(offer);
                 sendSignal(targetId, { type: 'offer', sdp: offer });
             }
-
-            peers[targetId].conn = pc;
         }
 
-        async function handleSignalMessage(senderId, signal) {
-            // Ensure PC exists (if we are the receiver)
-            if (!peers[senderId]) {
-                await startWebRTC(senderId, false);
-            }
+        async function handleSignal(senderId, signal) {
+            // If I receive an Offer, I must create a connection to handle it (I am the listener)
+            if (!peers[senderId]) await startWebRTC(senderId, false);
+            
             const pc = peers[senderId].conn;
 
             if (signal.type === 'offer') {
@@ -216,125 +224,99 @@
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
                 sendSignal(senderId, { type: 'answer', sdp: answer });
-            } 
-            else if (signal.type === 'answer') {
+            } else if (signal.type === 'answer') {
                 await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-            } 
-            else if (signal.type === 'candidate') {
-                try {
-                    await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-                } catch(e) { console.error("ICE Error", e); }
+            } else if (signal.type === 'candidate') {
+                try { await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)); } catch(e){}
             }
         }
 
-        function sendSignal(targetId, payload) {
-            // Write to the Target's "Mailbox" in Firebase
-            push(ref(db, `rooms/${ROOM_ID}/signals/${targetId}`), {
+        function sendSignal(target, payload) {
+            push(ref(db, `rooms/${ROOM_ID}/signals/${target}`), {
                 sender: MY_ID,
                 signal: payload
             });
         }
 
-        function setupChannel(channel, peerId) {
-            channel.onopen = () => {
-                console.log(`CONNECTED P2P with ${peerId}`);
-                document.getElementById('disp-status').innerText = "CONNECTED";
-                document.getElementById('disp-status').className = "green";
-                if(peers[peerId]) peers[peerId].channel = channel;
-            };
-
+        function setupChannel(channel, id) {
+            channel.onopen = () => console.log("Data Channel OPEN");
+            peers[id].channel = channel;
+            
             channel.onmessage = (e) => {
                 const data = JSON.parse(e.data);
-                // UPDATE ENEMY POSITION
-                if (otherPlayers[peerId]) {
-                    otherPlayers[peerId].targetX = data.x;
-                    otherPlayers[peerId].targetY = data.y;
+                if (otherPlayers[id]) {
+                    otherPlayers[id].targetX = data.x;
+                    otherPlayers[id].targetY = data.y;
                 } else {
-                    spawnEnemy(peerId, data.x, data.y);
+                    spawnEnemy(id, data.x, data.y);
                 }
             };
         }
 
-        // --- 7. PHASER GAME ENGINE ---
+        // --- PHASER ENGINE ---
         function initPhaser() {
-            const config = {
+            game = new Phaser.Game({
                 type: Phaser.AUTO,
                 scale: { mode: Phaser.Scale.RESIZE, parent: document.body },
                 backgroundColor: '#2c3e50',
-                physics: {
-                    default: 'arcade',
-                    arcade: { gravity: { y: 0 }, debug: false } // Zero G
-                },
+                physics: { default: 'arcade', arcade: { gravity: { y: 0 } } },
                 scene: { preload, create, update }
-            };
-            game = new Phaser.Game(config);
+            });
         }
 
         function preload() {
-            // Create Graphics programmatically (No images needed)
             const g = this.make.graphics({x:0, y:0, add:false});
             
-            // Me (Green)
-            g.fillStyle(0x2ecc71); g.fillRect(0,0,32,32);
-            g.generateTexture('me', 32, 32);
-
-            // Enemy (Red)
-            g.fillStyle(0xe74c3c); g.fillRect(0,0,32,32);
-            g.generateTexture('enemy', 32, 32);
+            // Visual diff: Host (Blue), Client (Green)
+            const color = AM_I_HOST ? 0x3498db : 0x2ecc71;
+            g.fillStyle(color); g.fillRect(0,0,32,32); g.generateTexture('me', 32, 32);
+            
+            // Enemy is Red
+            g.fillStyle(0xe74c3c); g.fillRect(0,0,32,32); g.generateTexture('enemy', 32, 32);
         }
 
         function create() {
             const self = this;
-            this.add.grid(0, 0, 2000, 2000, 50, 50, 0x000000).setAlpha(0.2);
+            this.add.grid(0,0,2000,2000,50,50,0x000000).setAlpha(0.2);
             this.physics.world.setBounds(-1000, -1000, 2000, 2000);
 
-            // Create Player
-            player = this.physics.add.sprite(Math.random()*400, Math.random()*400, 'me');
+            // Spawn Player
+            player = this.physics.add.sprite(Math.random()*200, Math.random()*200, 'me');
             player.setCollideWorldBounds(true);
-            player.setDrag(100);
+            player.setDrag(150);
             player.setMaxVelocity(400);
 
             this.cameras.main.startFollow(player);
 
-            // Controls
             cursors = this.input.keyboard.createCursorKeys();
             wasd = this.input.keyboard.addKeys('W,A,S,D');
 
-            // Global Spawn Helper
+            // Global Spawn
             window.spawnEnemy = (id, x, y) => {
-                const enemy = self.add.sprite(x, y, 'enemy');
-                enemy.targetX = x;
-                enemy.targetY = y;
-                otherPlayers[id] = enemy;
+                const e = self.add.sprite(x, y, 'enemy');
+                e.targetX = x; e.targetY = y;
+                otherPlayers[id] = e;
             };
         }
 
         function update() {
             if(!player) return;
-
-            // Movement
-            let ax = 0; let ay = 0; const speed = 600;
-            if (cursors.left.isDown || wasd.A.isDown) ax = -speed;
-            else if (cursors.right.isDown || wasd.D.isDown) ax = speed;
             
-            if (cursors.up.isDown || wasd.W.isDown) ay = -speed;
-            else if (cursors.down.isDown || wasd.S.isDown) ay = speed;
-
+            let ax=0, ay=0; const speed=600;
+            if (cursors.left.isDown || wasd.A.isDown) ax=-speed;
+            else if (cursors.right.isDown || wasd.D.isDown) ax=speed;
+            if (cursors.up.isDown || wasd.W.isDown) ay=-speed;
+            else if (cursors.down.isDown || wasd.S.isDown) ay=speed;
+            
             player.setAcceleration(ax, ay);
 
-            // Broadcast Position via WebRTC
-            const packet = JSON.stringify({
-                x: Math.round(player.x),
-                y: Math.round(player.y)
-            });
-
+            // Sync
+            const packet = JSON.stringify({x: Math.round(player.x), y: Math.round(player.y)});
             Object.values(peers).forEach(p => {
-                if (p.channel && p.channel.readyState === "open") {
-                    p.channel.send(packet);
-                }
+                if(p.channel && p.channel.readyState === 'open') p.channel.send(packet);
             });
 
-            // Interpolate Enemies
+            // Interpolation
             Object.values(otherPlayers).forEach(e => {
                 e.x = Phaser.Math.Linear(e.x, e.targetX, 0.2);
                 e.y = Phaser.Math.Linear(e.y, e.targetY, 0.2);
