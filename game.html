@@ -3,81 +3,77 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Warzone - Live Battle</title>
+    <title>Mini Militia Web - War Room</title>
     
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
 
     <style>
-        /* --- CSS INSIDE --- */
         body, html {
             margin: 0; padding: 0; width: 100%; height: 100%;
             overflow: hidden; background-color: #000;
             font-family: 'Arial Black', sans-serif;
             user-select: none;
-            -webkit-user-select: none;
         }
 
-        /* UI OVERLAY */
+        /* --- UI OVERLAY --- */
         #ui-layer {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            pointer-events: none; /* Click through to game */
-            z-index: 10;
+            pointer-events: none; z-index: 10;
         }
 
-        #ping-display {
+        #status-panel {
             position: absolute; top: 10px; left: 10px;
-            color: #0f0; font-size: 12px; font-family: monospace;
+            color: #fff; font-size: 14px; font-family: monospace;
+            background: rgba(0,0,0,0.5); padding: 10px; border-radius: 5px;
         }
 
-        /* "CLICK TO START" OVERLAY (Required for Fullscreen API) */
-        #deploy-overlay {
+        .status-line { margin-bottom: 5px; }
+        .green { color: #0f0; }
+        .red { color: #f00; }
+        .yellow { color: #ff0; }
+
+        /* --- START OVERLAY (Fullscreen Enforcer) --- */
+        #deploy-screen {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.9);
+            background: url('image_1.png') center/cover; /* Reusing your background */
             display: flex; flex-direction: column;
             justify-content: center; align-items: center;
             z-index: 100;
-            cursor: pointer;
         }
         
         #deploy-btn {
-            font-size: 3rem; color: white; border: 5px solid #4CAF50;
-            padding: 20px 50px; background: #1B5E20; text-transform: uppercase;
-            animation: pulse 1s infinite;
+            font-size: 2rem; color: white; 
+            padding: 20px 60px; background: #c0392b; 
+            border: 4px solid #922b21; border-radius: 10px;
+            cursor: pointer; text-transform: uppercase;
+            box-shadow: 0 10px #500;
+            pointer-events: auto;
+            transition: transform 0.1s;
         }
+        #deploy-btn:active { transform: translateY(5px); box-shadow: 0 5px #500; }
 
-        @keyframes pulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-            100% { transform: scale(1); }
-        }
-
-        /* MOBILE CONTROLS (Hidden on desktop usually, but useful here) */
-        .touch-zone {
-            position: absolute; bottom: 50px; width: 150px; height: 150px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 50%; pointer-events: auto;
-            border: 2px solid rgba(255,255,255,0.3);
-        }
-        #stick-left { left: 50px; }
-        #stick-right { right: 50px; }
     </style>
 </head>
 <body>
 
-    <div id="deploy-overlay">
-        <div id="deploy-btn">TAP TO DEPLOY</div>
-        <div style="color: #888; margin-top: 10px;">Establishing Uplink...</div>
+    <div id="deploy-screen">
+        <h1 style="color:white; text-shadow: 2px 2px #000;">DEPLOYMENT READY</h1>
+        <div id="deploy-btn">ENTER WARZONE</div>
     </div>
 
     <div id="ui-layer">
-        <div id="ping-display">P2P: DISCONNECTED</div>
+        <div id="status-panel">
+            <div class="status-line">ROOM: <span id="disp-room" class="yellow">...</span></div>
+            <div class="status-line">ID: <span id="disp-id" class="yellow">...</span></div>
+            <div class="status-line">P2P STATUS: <span id="disp-status" class="red">WAITING</span></div>
         </div>
+    </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-        import { getDatabase, ref, set, onValue, push, onChildAdded, remove, onDisconnect } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+        import { getDatabase, ref, set, push, onChildAdded, remove, onDisconnect } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
-        // --- 1. CONFIGURATION ---
+        // --- 1. SETUP & CONFIG ---
         const firebaseConfig = {
             apiKey: "AIzaSyBv36GemaSD-sMRUKjNdwkMiLyPv8-kOMI",
             authDomain: "mini-militia-online.firebaseapp.com",
@@ -91,10 +87,10 @@
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
-        // --- 2. SESSION CHECK ---
+        // --- 2. GET LOCAL STORAGE DATA ---
         const sessionRaw = localStorage.getItem('mm_session');
         if (!sessionRaw) {
-            alert("No Session Found! Redirecting to menu.");
+            alert("Mission Aborted: No credentials found.");
             window.location.href = "index.html";
         }
         const session = JSON.parse(sessionRaw);
@@ -102,14 +98,17 @@
         const MY_ID = session.id;
         const MY_NAME = session.name;
 
-        // --- 3. GLOBAL VARIABLES ---
+        // UI Updates
+        document.getElementById('disp-room').innerText = ROOM_ID;
+        document.getElementById('disp-id').innerText = MY_NAME;
+
+        // --- 3. GLOBAL VARS ---
         let game;
         let player;
         let cursors, wasd;
-        let otherPlayers = {}; // Stores Phaser Sprites
-        const peers = {}; // Stores WebRTC Connections: { peerId: { conn, channel } }
+        let otherPlayers = {}; // Sprite storage
+        const peers = {}; // Connection storage
         
-        // ICE Servers (Google's free STUN servers)
         const rtcConfig = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -117,84 +116,85 @@
             ]
         };
 
-        // --- 4. FULLSCREEN & START HANDLER ---
-        document.getElementById('deploy-overlay').addEventListener('click', function() {
+        // --- 4. START SEQUENCE ---
+        document.getElementById('deploy-btn').addEventListener('click', function() {
+            // Fullscreen
             const el = document.documentElement;
             if (el.requestFullscreen) el.requestFullscreen().catch(()=>{});
-            
-            // Lock Landscape
             if (screen.orientation && screen.orientation.lock) {
                 screen.orientation.lock('landscape').catch(()=>{});
             }
 
-            this.style.display = 'none'; // Hide overlay
-            startGame(); // Launch Phaser
+            // Hide Menu & Start
+            document.getElementById('deploy-screen').style.display = 'none';
+            initFirebaseSignaling();
+            initPhaser();
         });
 
+        // --- 5. FIREBASE SIGNALING (The Handshake) ---
+        function initFirebaseSignaling() {
+            console.log("Connecting to Firebase Signaling...");
 
-        // --- 5. WEBRTC SIGNALING LOGIC ---
-        function initSignaling() {
-            const signalsRef = ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`);
-            
-            // Listen for incoming signals (Offers/Answers/Candidates)
-            onChildAdded(signalsRef, (snapshot) => {
-                const data = snapshot.val();
-                const senderId = data.sender;
-                const signal = data.signal;
+            // A. Register Myself in the Room
+            const myRef = ref(db, `rooms/${ROOM_ID}/players/${MY_ID}`);
+            set(myRef, { name: MY_NAME, online: true });
+            onDisconnect(myRef).remove(); // Only remove ME when I leave
 
-                handleSignal(senderId, signal);
-                
-                // Delete signal after reading to keep DB clean
-                remove(snapshot.ref);
-            });
-
-            // Detect NEW players joining to initiate connection
+            // B. Listen for New Players (To initiate calls)
             const playersRef = ref(db, `rooms/${ROOM_ID}/players`);
             onChildAdded(playersRef, (snapshot) => {
-                const newPeerId = snapshot.key;
-                if (newPeerId !== MY_ID) {
-                    console.log("New Player Detected:", newPeerId);
-                    // If I am already in the room and they join, I initiate.
-                    // (Simple logic: compare IDs alphabetically to decide who initiates to avoid collision)
-                    if (MY_ID < newPeerId) {
-                        createPeerConnection(newPeerId, true);
-                    } else {
-                        createPeerConnection(newPeerId, false);
-                    }
+                const peerId = snapshot.key;
+                if (peerId === MY_ID) return;
+
+                console.log("Player Detected:", peerId);
+                
+                // COLLISION AVOIDANCE:
+                // If My ID is "Alphabetically Smaller" than theirs, I call them.
+                // If theirs is smaller, I wait for them to call me.
+                // This ensures we don't both call each other at the same time.
+                if (MY_ID < peerId) {
+                    console.log("I am initiating connection to", peerId);
+                    startWebRTC(peerId, true); // true = I am Caller
+                } else {
+                    console.log("I am waiting for offer from", peerId);
+                    startWebRTC(peerId, false); // false = I am Listener
                 }
+            });
+
+            // C. Listen for Signals sent TO ME
+            const mySignalsRef = ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`);
+            onChildAdded(mySignalsRef, (snapshot) => {
+                const data = snapshot.val();
+                handleSignalMessage(data.sender, data.signal);
+                remove(snapshot.ref); // Delete signal after reading
             });
         }
 
-        async function createPeerConnection(targetId, isInitiator) {
+        // --- 6. WEBRTC LOGIC (The Pipe) ---
+        async function startWebRTC(targetId, isInitiator) {
             if (peers[targetId]) return; // Already connected
 
-            console.log(`Creating RTC connection to ${targetId}. Initiator: ${isInitiator}`);
             const pc = new RTCPeerConnection(rtcConfig);
-            let dataChannel;
+            peers[targetId] = { conn: pc, channel: null };
 
-            // 1. DATA CHANNEL SETUP
+            // 1. DATA CHANNEL (Caller creates it)
             if (isInitiator) {
-                // Initiator creates the channel
-                dataChannel = pc.createDataChannel("gameData");
-                setupDataChannel(dataChannel, targetId);
+                const channel = pc.createDataChannel("game-data");
+                setupChannel(channel, targetId);
             } else {
-                // Receiver waits for channel
-                pc.ondatachannel = (event) => {
-                    dataChannel = event.channel;
-                    setupDataChannel(dataChannel, targetId);
+                pc.ondatachannel = (e) => {
+                    setupChannel(e.channel, targetId);
                 };
             }
 
-            peers[targetId] = { conn: pc, channel: null };
-
-            // 2. ICE CANDIDATES
-            pc.onicecandidate = (event) => {
-                if (event.candidate) {
-                    sendSignal(targetId, { type: 'candidate', candidate: event.candidate });
+            // 2. ICE CANDIDATES (Network Paths)
+            pc.onicecandidate = (e) => {
+                if (e.candidate) {
+                    sendSignal(targetId, { type: 'candidate', candidate: e.candidate });
                 }
             };
 
-            // 3. NEGOTIATION (Offer/Answer)
+            // 3. CREATE OFFER (If Caller)
             if (isInitiator) {
                 const offer = await pc.createOffer();
                 await pc.setLocalDescription(offer);
@@ -204,11 +204,11 @@
             peers[targetId].conn = pc;
         }
 
-        async function handleSignal(senderId, signal) {
+        async function handleSignalMessage(senderId, signal) {
+            // Ensure PC exists (if we are the receiver)
             if (!peers[senderId]) {
-                await createPeerConnection(senderId, false);
+                await startWebRTC(senderId, false);
             }
-            
             const pc = peers[senderId].conn;
 
             if (signal.type === 'offer') {
@@ -216,110 +216,92 @@
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
                 sendSignal(senderId, { type: 'answer', sdp: answer });
-            
-            } else if (signal.type === 'answer') {
+            } 
+            else if (signal.type === 'answer') {
                 await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-            
-            } else if (signal.type === 'candidate') {
+            } 
+            else if (signal.type === 'candidate') {
                 try {
                     await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-                } catch (e) {
-                    console.error("Error adding Ice Candidate", e);
-                }
+                } catch(e) { console.error("ICE Error", e); }
             }
         }
 
-        function sendSignal(targetId, signalPayload) {
+        function sendSignal(targetId, payload) {
+            // Write to the Target's "Mailbox" in Firebase
             push(ref(db, `rooms/${ROOM_ID}/signals/${targetId}`), {
                 sender: MY_ID,
-                signal: signalPayload
+                signal: payload
             });
         }
 
-        function setupDataChannel(channel, peerId) {
+        function setupChannel(channel, peerId) {
             channel.onopen = () => {
-                console.log(`WebRTC Data Channel OPEN with ${peerId}`);
-                document.getElementById('ping-display').innerText = "P2P: CONNECTED (Active)";
-                document.getElementById('ping-display').style.color = "#00ff00";
+                console.log(`CONNECTED P2P with ${peerId}`);
+                document.getElementById('disp-status').innerText = "CONNECTED";
+                document.getElementById('disp-status').className = "green";
                 if(peers[peerId]) peers[peerId].channel = channel;
             };
-            
-            channel.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                // WEBRTC UPDATE LOOP
+
+            channel.onmessage = (e) => {
+                const data = JSON.parse(e.data);
+                // UPDATE ENEMY POSITION
                 if (otherPlayers[peerId]) {
                     otherPlayers[peerId].targetX = data.x;
                     otherPlayers[peerId].targetY = data.y;
                 } else {
-                    // Spawn if not exists
                     spawnEnemy(peerId, data.x, data.y);
                 }
             };
         }
 
-        // --- 6. PHASER GAME LOGIC ---
-        function startGame() {
-            // Init WebRTC listeners
-            initSignaling();
-
+        // --- 7. PHASER GAME ENGINE ---
+        function initPhaser() {
             const config = {
                 type: Phaser.AUTO,
-                scale: {
-                    mode: Phaser.Scale.RESIZE, // Auto Resize to Fullscreen
-                    parent: document.body,
-                    width: '100%',
-                    height: '100%'
-                },
+                scale: { mode: Phaser.Scale.RESIZE, parent: document.body },
                 backgroundColor: '#2c3e50',
                 physics: {
                     default: 'arcade',
-                    arcade: { gravity: { y: 0 }, debug: false }
+                    arcade: { gravity: { y: 0 }, debug: false } // Zero G
                 },
                 scene: { preload, create, update }
             };
-
             game = new Phaser.Game(config);
         }
 
         function preload() {
-            const g = this.make.graphics({ x: 0, y: 0, add: false });
+            // Create Graphics programmatically (No images needed)
+            const g = this.make.graphics({x:0, y:0, add:false});
+            
+            // Me (Green)
+            g.fillStyle(0x2ecc71); g.fillRect(0,0,32,32);
+            g.generateTexture('me', 32, 32);
 
-            // Textures
-            g.fillStyle(0x4CAF50); g.fillRect(0, 0, 40, 40);
-            g.generateTexture('soldier', 40, 40);
-
-            g.fillStyle(0xE74C3C); g.fillRect(0, 0, 40, 40);
-            g.generateTexture('enemy', 40, 40);
+            // Enemy (Red)
+            g.fillStyle(0xe74c3c); g.fillRect(0,0,32,32);
+            g.generateTexture('enemy', 32, 32);
         }
 
         function create() {
             const self = this;
-            
-            // World
-            this.physics.world.setBounds(0, 0, 2000, 2000);
-            this.add.grid(1000, 1000, 2000, 2000, 50, 50, 0x000000).setAlpha(0.2);
+            this.add.grid(0, 0, 2000, 2000, 50, 50, 0x000000).setAlpha(0.2);
+            this.physics.world.setBounds(-1000, -1000, 2000, 2000);
 
-            // Player
-            player = this.physics.add.sprite(Math.random()*500, Math.random()*500, 'soldier');
+            // Create Player
+            player = this.physics.add.sprite(Math.random()*400, Math.random()*400, 'me');
             player.setCollideWorldBounds(true);
-            player.setDrag(200);
+            player.setDrag(100);
             player.setMaxVelocity(400);
 
-            // Camera
             this.cameras.main.startFollow(player);
-            this.cameras.main.setZoom(1);
 
             // Controls
             cursors = this.input.keyboard.createCursorKeys();
             wasd = this.input.keyboard.addKeys('W,A,S,D');
 
-            // Handle Disconnect logic
-            const myRef = ref(db, `rooms/${ROOM_ID}/players/${MY_ID}`);
-            onDisconnect(myRef).remove();
-            
-            // Expose spawn function globally for the WebRTC callback
+            // Global Spawn Helper
             window.spawnEnemy = (id, x, y) => {
-                if(otherPlayers[id]) return;
                 const enemy = self.add.sprite(x, y, 'enemy');
                 enemy.targetX = x;
                 enemy.targetY = y;
@@ -328,34 +310,34 @@
         }
 
         function update() {
-            if (!player) return;
+            if(!player) return;
 
-            // 1. MOVEMENT (Zero G)
-            let accX = 0; let accY = 0;
-            const speed = 600;
-
-            if (cursors.left.isDown || wasd.A.isDown) accX = -speed;
-            else if (cursors.right.isDown || wasd.D.isDown) accX = speed;
-
-            if (cursors.up.isDown || wasd.W.isDown) accY = -speed;
-            else if (cursors.down.isDown || wasd.S.isDown) accY = speed;
-
-            player.setAcceleration(accX, accY);
-
-            // 2. BROADCAST VIA WEBRTC
-            // Send 30 times a second to save bandwidth, or every frame if desired
-            const posData = JSON.stringify({ x: Math.round(player.x), y: Math.round(player.y) });
+            // Movement
+            let ax = 0; let ay = 0; const speed = 600;
+            if (cursors.left.isDown || wasd.A.isDown) ax = -speed;
+            else if (cursors.right.isDown || wasd.D.isDown) ax = speed;
             
+            if (cursors.up.isDown || wasd.W.isDown) ay = -speed;
+            else if (cursors.down.isDown || wasd.S.isDown) ay = speed;
+
+            player.setAcceleration(ax, ay);
+
+            // Broadcast Position via WebRTC
+            const packet = JSON.stringify({
+                x: Math.round(player.x),
+                y: Math.round(player.y)
+            });
+
             Object.values(peers).forEach(p => {
-                if (p.channel && p.channel.readyState === 'open') {
-                    p.channel.send(posData);
+                if (p.channel && p.channel.readyState === "open") {
+                    p.channel.send(packet);
                 }
             });
 
-            // 3. INTERPOLATE ENEMIES
-            Object.values(otherPlayers).forEach(enemy => {
-                enemy.x = Phaser.Math.Linear(enemy.x, enemy.targetX, 0.2); // Smooth lerp
-                enemy.y = Phaser.Math.Linear(enemy.y, enemy.targetY, 0.2);
+            // Interpolate Enemies
+            Object.values(otherPlayers).forEach(e => {
+                e.x = Phaser.Math.Linear(e.x, e.targetX, 0.2);
+                e.y = Phaser.Math.Linear(e.y, e.targetY, 0.2);
             });
         }
     </script>
