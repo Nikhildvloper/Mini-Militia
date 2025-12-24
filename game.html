@@ -23,6 +23,18 @@
             padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-left: 5px;
         }
 
+        /* NEW CONNECT BUTTON */
+        #btn-manual-connect {
+            display: none; /* Hidden by default, shown only for Client */
+            position: absolute; top: 10px; right: 10px;
+            pointer-events: auto;
+            background: #27ae60; color: white; font-weight: bold;
+            border: 2px solid #fff; padding: 10px 20px;
+            cursor: pointer; text-transform: uppercase;
+            box-shadow: 0 4px #000;
+        }
+        #btn-manual-connect:active { transform: translateY(2px); box-shadow: 0 2px #000; }
+
         #deploy-screen {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: #222; display: flex; flex-direction: column;
@@ -52,11 +64,13 @@
             <div>ROLE: <span id="disp-role">UNDEFINED</span></div>
             <div>STATUS: <span id="disp-status" class="red">DISCONNECTED</span></div>
         </div>
+
+        <button id="btn-manual-connect">CONNECT TO HOST</button>
     </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-        import { getDatabase, ref, set, push, onChildAdded, remove, onDisconnect, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+        import { getDatabase, ref, set, push, onChildAdded, remove, onDisconnect, runTransaction, get, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
         // --- CONFIG ---
         const firebaseConfig = {
@@ -72,7 +86,7 @@
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
-        // --- LOAD SESSION ---
+        // --- SESSION ---
         const sessionRaw = localStorage.getItem('mm_session');
         if (!sessionRaw) window.location.href = "index.html";
         const session = JSON.parse(sessionRaw);
@@ -86,91 +100,96 @@
         let otherPlayers = {};
         const peers = {};
         let AM_I_HOST = false; 
-        
+        let TARGET_HOST_ID = null; // Stores the Host's ID for the client to call
+
         const rtcConfig = {
             iceServers: [ { urls: 'stun:stun.l.google.com:19302' } ]
         };
 
-        // --- INITIALIZATION SEQUENCE ---
+        // --- INIT SEQUENCE ---
         
-        // 1. Determine Role immediately
         determineRole().then(() => {
             document.getElementById('disp-id').innerText = MY_NAME.substring(0, 10);
             document.getElementById('deploy-msg').innerText = AM_I_HOST ? "Role Assigned: HOST" : "Role Assigned: CLIENT";
             
             if (AM_I_HOST) {
+                // I AM HOST
                 document.getElementById('host-badge').style.display = "inline-block";
                 document.getElementById('disp-role').innerText = "HOST (Passive Mode)";
                 document.getElementById('disp-role').className = "blue";
+                document.getElementById('btn-manual-connect').style.display = "none"; // Host doesn't need this
             } else {
-                document.getElementById('disp-role').innerText = "CLIENT (Active Caller)";
+                // I AM CLIENT
+                document.getElementById('disp-role').innerText = "CLIENT";
                 document.getElementById('disp-role').className = "yellow";
+                document.getElementById('btn-manual-connect').style.display = "block"; // Show Connect Button
+                
+                // Listen for Host ID so we know who to call
+                onValue(ref(db, `rooms/${ROOM_ID}/hostID`), (snapshot) => {
+                    TARGET_HOST_ID = snapshot.val();
+                    console.log("Host Identified as:", TARGET_HOST_ID);
+                });
             }
         });
 
         async function determineRole() {
             const hostRef = ref(db, `rooms/${ROOM_ID}/hostID`);
             
-            // Transaction to claim Host ID
             await runTransaction(hostRef, (currentHostID) => {
                 if (currentHostID === null) return MY_ID; 
                 else if (currentHostID === MY_ID) return MY_ID; 
-                else return undefined; // Already taken
+                else return undefined; 
             }).then((result) => {
                 if (result.committed) {
                     AM_I_HOST = true;
-                    onDisconnect(hostRef).remove(); // Drop Host role if I leave
+                    onDisconnect(hostRef).remove();
                 } else {
                     AM_I_HOST = false;
                 }
             });
         }
 
-        // --- START BUTTON ---
+        // --- BUTTONS ---
+        
+        // 1. DEPLOY (Start Game)
         document.getElementById('deploy-btn').addEventListener('click', () => {
             const el = document.documentElement;
             if (el.requestFullscreen) el.requestFullscreen().catch(()=>{});
             document.getElementById('deploy-screen').style.display = 'none';
-            
             initSignaling();
             initPhaser();
         });
 
+        // 2. CONNECT TO HOST (Manual Trigger)
+        document.getElementById('btn-manual-connect').addEventListener('click', () => {
+            if (!TARGET_HOST_ID) {
+                alert("Host not found yet! Wait a second...");
+                return;
+            }
+            if (TARGET_HOST_ID === MY_ID) {
+                alert("Error: You seem to be the Host.");
+                return;
+            }
+            
+            const btn = document.getElementById('btn-manual-connect');
+            btn.innerText = "CALLING...";
+            btn.style.backgroundColor = "#e67e22";
+            
+            console.log("Manually calling Host:", TARGET_HOST_ID);
+            startWebRTC(TARGET_HOST_ID, true); // Force initiate call
+        });
+
+
         // --- SIGNALING ---
         function initSignaling() {
-            console.log("Connecting to Firebase...");
+            console.log("Signaling Active.");
 
-            // 1. Announce Presence
+            // Announce
             const myRef = ref(db, `rooms/${ROOM_ID}/players/${MY_ID}`);
             set(myRef, { online: true, name: MY_NAME });
             onDisconnect(myRef).remove();
 
-            // 2. Peer Discovery Logic (The "Call" Logic)
-            const playersRef = ref(db, `rooms/${ROOM_ID}/players`);
-            onChildAdded(playersRef, (snapshot) => {
-                const peerId = snapshot.key;
-                if (peerId === MY_ID) return;
-
-                console.log(`Peer Found: ${peerId}`);
-
-                if (AM_I_HOST) {
-                    // --- HOST LOGIC: PASSIVE ---
-                    // Do nothing. Just wait for the "Offer" signal.
-                    console.log("I am Host. Waiting for incoming call...");
-                } else {
-                    // --- CLIENT LOGIC: AGGRESSIVE ---
-                    // Call everyone I see immediately.
-                    // (We add a small ID check just in case two Clients join, to avoid collision between them)
-                    if (AM_I_HOST === false) {
-                        // If peer is Host, I CALL.
-                        // If peer is Client, verify ID order to avoid double-call.
-                        console.log("I am Client. Calling", peerId);
-                        startWebRTC(peerId, true); 
-                    }
-                }
-            });
-
-            // 3. Listen for Signals (Offers/Answers)
+            // Listen for Incoming Signals (Offers/Answers)
             onChildAdded(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`), (snapshot) => {
                 const data = snapshot.val();
                 if (data) {
@@ -181,9 +200,12 @@
             });
         }
 
-        // --- WEBRTC CORE ---
+        // --- WEBRTC ---
         async function startWebRTC(targetId, isInitiator) {
-            if (peers[targetId]) return;
+            if (peers[targetId]) {
+                console.log("Connection already exists.");
+                return;
+            }
 
             const pc = new RTCPeerConnection(rtcConfig);
             peers[targetId] = { conn: pc, channel: null };
@@ -192,10 +214,13 @@
                 if(pc.iceConnectionState === 'connected') {
                     document.getElementById('disp-status').innerText = "CONNECTED";
                     document.getElementById('disp-status').className = "green";
+                    
+                    // Hide button on success
+                    const btn = document.getElementById('btn-manual-connect');
+                    if(btn) btn.style.display = "none";
                 }
             };
 
-            // Data Channel
             if (isInitiator) {
                 const channel = pc.createDataChannel("game");
                 setupChannel(channel, targetId);
@@ -203,14 +228,11 @@
                 pc.ondatachannel = (e) => setupChannel(e.channel, targetId);
             }
 
-            // ICE Candidates
             pc.onicecandidate = (e) => {
                 if (e.candidate) sendSignal(targetId, { type: 'candidate', candidate: e.candidate });
             };
 
-            // Negotiation
             if (isInitiator) {
-                // CLIENT creates Offer
                 const offer = await pc.createOffer();
                 await pc.setLocalDescription(offer);
                 sendSignal(targetId, { type: 'offer', sdp: offer });
@@ -218,22 +240,19 @@
         }
 
         async function handleSignal(senderId, signal) {
-            // If I receive an Offer, I must create a connection to handle it
+            // Host receives Offer -> Creates Answer
             if (!peers[senderId]) await startWebRTC(senderId, false);
             
             const pc = peers[senderId].conn;
 
             if (signal.type === 'offer') {
-                // HOST receives Offer -> Instantly sets Remote & Creates Answer
                 await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
                 sendSignal(senderId, { type: 'answer', sdp: answer });
             
             } else if (signal.type === 'answer') {
-                // CLIENT receives Answer
                 await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-            
             } else if (signal.type === 'candidate') {
                 try { await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)); } catch(e){}
             }
@@ -249,7 +268,6 @@
         function setupChannel(channel, id) {
             channel.onopen = () => console.log("Data Channel OPEN");
             peers[id].channel = channel;
-            
             channel.onmessage = (e) => {
                 const data = JSON.parse(e.data);
                 if (otherPlayers[id]) {
@@ -261,7 +279,7 @@
             };
         }
 
-        // --- PHASER ENGINE ---
+        // --- PHASER ---
         function initPhaser() {
             game = new Phaser.Game({
                 type: Phaser.AUTO,
