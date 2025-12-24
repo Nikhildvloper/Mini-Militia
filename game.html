@@ -13,25 +13,14 @@
         
         #status-panel {
             position: absolute; top: 10px; left: 10px;
-            background: rgba(0,0,0,0.8); padding: 10px; border: 1px solid #555; pointer-events: auto;
-            min-width: 220px;
+            background: rgba(0,0,0,0.6); padding: 10px; border: 1px solid #555; pointer-events: auto;
+            min-width: 220px; border-radius: 8px;
         }
         .green { color: #2ecc71; font-weight: bold; } 
         .red { color: #e74c3c; } 
         .blue { color: #3498db; } 
         .yellow { color: #f1c40f; } 
-
-        #console-log {
-            position: absolute; bottom: 0; left: 0; width: 100%; height: 150px;
-            background: rgba(0,0,0,0.8); border-top: 2px solid #444;
-            overflow-y: auto; padding: 10px; font-size: 11px; pointer-events: auto;
-        }
-
-        #btn-manual-connect {
-            display: none; position: absolute; top: 10px; right: 10px; pointer-events: auto;
-            background: #27ae60; color: white; font-weight: bold; border: 2px solid #fff; 
-            padding: 10px 20px; cursor: pointer; text-transform: uppercase;
-        }
+        .orange { color: #e67e22; }
 
         #deploy-screen {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
@@ -41,22 +30,9 @@
         #deploy-btn {
             font-size: 2rem; padding: 20px 40px; background: #27ae60; 
             color: white; border: none; cursor: pointer; pointer-events: auto;
+            border-bottom: 5px solid #1e8449; border-radius: 5px;
         }
-
-        /* VIDEO STYLES (Adapted from your snippet) */
-        #video-container {
-            position: absolute; top: 10px; right: 10px;
-            display: flex; flex-direction: column; gap: 5px;
-            pointer-events: auto; z-index: 20;
-        }
-        
-        video {
-            width: 150px; height: 112px;
-            background: #222; border: 2px solid #fff; border-radius: 8px;
-            object-fit: cover; transform: scaleX(-1);
-        }
-        #local-video { border-color: #2ecc71; }
-        #remote-video { border-color: #e74c3c; display: none; } 
+        #deploy-btn:active { transform: translateY(4px); border-bottom: 2px solid #1e8449; }
 
         .coord-box { margin-top: 10px; border-top: 1px solid #555; padding-top: 5px; font-size: 12px; }
     </style>
@@ -79,28 +55,14 @@
                 <div>ENEMY: <span id="enemy-coords" class="red">WAITING...</span></div>
             </div>
         </div>
-        
-        <button id="btn-manual-connect">CONNECT TO HOST</button>
-        <div id="console-log"></div>
-
-        <div id="video-container">
-            <video id="local-video" autoplay playsinline muted></video>
-            <video id="remote-video" autoplay playsinline></video>
-        </div>
     </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-        import { getDatabase, ref, set, push, onChildAdded, remove, onDisconnect, runTransaction, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+        // Added onChildRemoved to imports
+        import { getDatabase, ref, set, push, onChildAdded, onChildRemoved, remove, onDisconnect, runTransaction, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
-        function log(msg) {
-            const div = document.getElementById('console-log');
-            const p = document.createElement('div');
-            p.innerText = `> ${msg}`;
-            div.appendChild(p);
-            div.scrollTop = div.scrollHeight;
-            console.log(msg);
-        }
+        function log(msg) { console.log(msg); }
 
         const firebaseConfig = {
             apiKey: "AIzaSyBv36GemaSD-sMRUKjNdwkMiLyPv8-kOMI",
@@ -133,7 +95,6 @@
         const peers = {};
         let AM_I_HOST = false;
         let TARGET_HOST_ID = null;
-        let localStream = null;
 
         document.getElementById('disp-id').innerText = session.name;
 
@@ -144,6 +105,7 @@
             return undefined; 
         }).then((result) => {
             AM_I_HOST = result.committed;
+            
             if (AM_I_HOST) {
                 document.getElementById('disp-role').innerText = "HOST";
                 document.getElementById('disp-role').className = "blue";
@@ -153,36 +115,21 @@
             } else {
                 document.getElementById('disp-role').innerText = "CLIENT";
                 document.getElementById('disp-role').className = "yellow";
-                document.getElementById('btn-manual-connect').style.display = "block";
                 onValue(ref(db, `rooms/${ROOM_ID}/hostID`), (snap) => {
                     TARGET_HOST_ID = snap.val();
-                    if (TARGET_HOST_ID) log(`Host Detected: ${TARGET_HOST_ID.substring(0,6)}`);
+                    if (TARGET_HOST_ID) {
+                        log(`Host Found: ${TARGET_HOST_ID}. Auto-Calling...`);
+                        startWebRTC(TARGET_HOST_ID, true);
+                    }
                 });
             }
         });
 
-        // --- START HANDLER ---
         document.getElementById('deploy-btn').addEventListener('click', async () => {
             document.documentElement.requestFullscreen().catch(()=>{});
             document.getElementById('deploy-screen').style.display = 'none';
-
-            // 1. START CAMERA (Logic from your snippet)
-            try {
-                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                document.getElementById('local-video').srcObject = localStream;
-                log("Camera Started");
-            } catch (e) {
-                log("Cam Error: " + e.message);
-            }
-
             initSignaling();
             initPhaser();
-        });
-
-        document.getElementById('btn-manual-connect').addEventListener('click', () => {
-            if (!TARGET_HOST_ID) return log("Error: No Host ID.");
-            log(`Calling Host...`);
-            startWebRTC(TARGET_HOST_ID, true);
         });
 
         // --- SIGNALING ---
@@ -194,12 +141,21 @@
             set(myRef, { online: true, name: session.name });
             onDisconnect(myRef).remove();
 
+            // 1. Listen for Messages
             onChildAdded(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`), (snapshot) => {
                 const data = snapshot.val();
                 if (data) {
-                    log(`Rx ${data.payload.type}`);
                     handleSignal(data.sender, data.payload);
-                    remove(snapshot.ref);
+                }
+            });
+
+            // 2. Listen for INSTANT DISCONNECTION (The Fix)
+            // If any player leaves the database (tab closed), we know instantly.
+            onChildRemoved(ref(db, `rooms/${ROOM_ID}/players`), (snapshot) => {
+                const leftPlayerId = snapshot.key;
+                if (leftPlayerId !== MY_ID) {
+                    log(`Player Left Instantly: ${leftPlayerId}`);
+                    cleanupPeer(leftPlayerId);
                 }
             });
         }
@@ -219,24 +175,6 @@
             const pc = new RTCPeerConnection(rtcConfig);
             peers[targetId] = { conn: pc, channel: null };
 
-            // A. ADD TRACKS (Logic from your snippet)
-            if (localStream) {
-                localStream.getTracks().forEach(track => {
-                    pc.addTrack(track, localStream);
-                });
-                log("Tracks Added to PC");
-            }
-
-            // B. REMOTE STREAM HANDLER
-            pc.ontrack = (event) => {
-                log("Remote Stream Received!");
-                const remoteVid = document.getElementById('remote-video');
-                // Use the first stream found
-                remoteVid.srcObject = event.streams[0];
-                remoteVid.style.display = 'block';
-            };
-
-            // Monitor State
             pc.oniceconnectionstatechange = () => {
                 const state = pc.iceConnectionState;
                 log(`ICE State: ${state}`);
@@ -246,11 +184,15 @@
                 if(state === 'connected' || state === 'completed') {
                     statusEl.innerText = "CONNECTED";
                     statusEl.className = "green"; 
-                    document.getElementById('btn-manual-connect').style.display = "none";
+                } else if (state === 'checking') {
+                    statusEl.className = "orange";
+                } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+                    // Backup cleanup (if Firebase didn't catch it first)
+                    statusEl.className = "red";
+                    cleanupPeer(targetId);
                 }
             };
 
-            // Data Channel
             if (isInitiator) {
                 const channel = pc.createDataChannel("game");
                 setupChannel(channel, targetId);
@@ -258,16 +200,39 @@
                 pc.ondatachannel = (e) => setupChannel(e.channel, targetId);
             }
 
-            // ICE Candidates
             pc.onicecandidate = (e) => {
                 if (e.candidate) sendSignal(targetId, { type: 'candidate', candidate: e.candidate.toJSON() });
             };
 
-            // Negotiation
             if (isInitiator) {
                 const offer = await pc.createOffer();
                 await pc.setLocalDescription(offer);
                 sendSignal(targetId, { type: 'offer', sdp: offer });
+            }
+        }
+
+        // --- CLEANUP HELPER (Resets Connection) ---
+        function cleanupPeer(id) {
+            // Close WebRTC
+            if (peers[id]) {
+                peers[id].conn.close();
+                delete peers[id];
+                log("Connection Cleaned.");
+            }
+            // Remove Sprite
+            if (otherPlayers[id]) {
+                otherPlayers[id].destroy(); 
+                delete otherPlayers[id];
+            }
+            // Update UI to "Waiting"
+            document.getElementById('enemy-coords').innerText = "WAITING FOR RECONNECT...";
+            document.getElementById('enemy-coords').className = "red";
+            
+            // If I am Host, update status
+            if (AM_I_HOST) {
+                const statusEl = document.getElementById('disp-status');
+                statusEl.innerText = "WAITING...";
+                statusEl.className = "red";
             }
         }
 
@@ -276,7 +241,6 @@
             const pc = peers[senderId].conn;
 
             if (signal.type === 'offer') {
-                // IMPORTANT: Ensure Remote Description is set BEFORE Answer
                 await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
@@ -287,30 +251,32 @@
                     await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
                 }
             } else if (signal.type === 'candidate') {
-                // CRITICAL FIX: Add candidate only if remote desc is set, or queue it
                 try { 
                     if (pc.remoteDescription) {
                         await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
                     } else {
-                        // If we get candidate before offer, we just wait/ignore in this simple version
-                        // Usually you queue them, but modern browsers handle this okay.
-                        log("Info: Candidate rx before remote desc.");
                          await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
                     }
-                } catch(e) { log("ICE Error: " + e.message); }
+                } catch(e) { log("ICE Error"); }
             }
         }
 
         function setupChannel(channel, id) {
             channel.onopen = () => {
                 log("Data Channel OPEN");
-                // Send immediate spawn info
-                if(player) {
-                    const packet = JSON.stringify({ x: Math.round(player.x), y: Math.round(player.y) });
-                    channel.send(packet);
-                }
+                const statusEl = document.getElementById('disp-status');
+                statusEl.innerText = "SYNC ACTIVE";
+                statusEl.className = "green";
+
+                setTimeout(() => {
+                    if(player) {
+                        const packet = JSON.stringify({ x: Math.round(player.x), y: Math.round(player.y) });
+                        channel.send(packet);
+                    }
+                }, 500);
             };
             peers[id].channel = channel;
+            
             channel.onmessage = (e) => {
                 const data = JSON.parse(e.data);
                 if (otherPlayers[id]) {
@@ -346,6 +312,7 @@
             const self = this;
             this.add.grid(0,0,2000,2000,50,50,0x000000).setAlpha(0.2);
             this.physics.world.setBounds(-1000, -1000, 2000, 2000);
+            
             player = this.physics.add.sprite(Math.random()*400, Math.random()*400, 'me');
             this.cameras.main.startFollow(player);
             cursors = this.input.keyboard.createCursorKeys();
