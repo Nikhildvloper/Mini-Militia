@@ -61,264 +61,73 @@
     </div>
 
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-        import { getDatabase, ref, set, push, onChildAdded, onChildRemoved, remove, onDisconnect, runTransaction, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+        // Import the Network Engine
+        import { startNetwork, broadcastData } from "./webrtc.js";
 
-        function log(msg) { console.log(msg); }
-
-        // --- CONFIG ---
-        const firebaseConfig = {
-            apiKey: "AIzaSyBv36GemaSD-sMRUKjNdwkMiLyPv8-kOMI",
-            authDomain: "mini-militia-online.firebaseapp.com",
-            databaseURL: "https://mini-militia-online-default-rtdb.asia-southeast1.firebasedatabase.app",
-            projectId: "mini-militia-online",
-            storageBucket: "mini-militia-online.firebasestorage.app",
-            messagingSenderId: "1042367396622",
-            appId: "1:1042367396622:web:271681c7160b559807b55f"
-        };
-
-        const app = initializeApp(firebaseConfig);
-        const db = getDatabase(app);
-
-        const rtcConfig = {
-            iceServers: [
-                { urls: "stun:stun.l.google.com:19302" },
-                { urls: "stun:stun1.l.google.com:19302" }
-            ]
-        };
-
+        // --- SESSION ---
         const sessionRaw = localStorage.getItem('mm_session');
         if (!sessionRaw) window.location.href = "index.html";
         const session = JSON.parse(sessionRaw);
-        const ROOM_ID = session.room;
-        const MY_ID = session.id;
-
-        let game, player, cursors, wasd;
-        let otherPlayers = {};
-        const peers = {};
-        let AM_I_HOST = false;
-        let TARGET_HOST_ID = null;
-
+        
         document.getElementById('disp-id').innerText = session.name;
+
+        // --- GLOBALS ---
+        let game, player, cursors, wasd;
+        let otherPlayers = {}; // Stores Enemy Sprites
 
         // --- 1. THE TRIGGER ---
         const deployBtn = document.getElementById('deploy-btn');
         deployBtn.addEventListener('click', async () => {
-            // A. UI Feedback
             deployBtn.style.display = 'none';
             document.getElementById('loading-text').style.display = 'block';
 
-            // B. Fullscreen
-            try {
-                if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
-            } catch(e) {}
+            try { if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen(); } catch(e) {}
 
-            // C. Start The Sequence
-            startDeployment();
+            document.getElementById('deploy-screen').style.display = 'none';
+            document.getElementById('ui-layer').style.display = 'block';
+
+            // Start Networking
+            startNetwork(session.room, session.id, session.name);
+            
+            // Start Game
+            initPhaser();
         });
 
-        // --- 2. DEPLOYMENT SEQUENCE ---
-        function startDeployment() {
-            // Determine Role NOW (Not before)
-            runTransaction(ref(db, `rooms/${ROOM_ID}/hostID`), (current) => {
-                if (current === null) return MY_ID;
-                if (current === MY_ID) return MY_ID;
-                return undefined; 
-            }).then((result) => {
-                AM_I_HOST = result.committed;
-                
-                // Show Game UI
-                document.getElementById('deploy-screen').style.display = 'none';
-                document.getElementById('ui-layer').style.display = 'block';
-                
-                if (AM_I_HOST) {
-                    setupHost();
-                } else {
-                    setupClient();
-                }
-
-                // Start Systems
-                initSignaling();
-                initPhaser();
-            });
-        }
-
-        function setupHost() {
-            document.getElementById('disp-role').innerText = "HOST";
-            document.getElementById('disp-role').className = "blue";
-            document.getElementById('disp-status').innerText = "WAITING FOR CLIENT...";
-            
-            // Register Host ID
-            const hostRef = ref(db, `rooms/${ROOM_ID}/hostID`);
-            set(hostRef, MY_ID);
-            onDisconnect(hostRef).remove();
-        }
-
-        function setupClient() {
-            document.getElementById('disp-role').innerText = "CLIENT";
-            document.getElementById('disp-role').className = "yellow";
-            document.getElementById('disp-status').innerText = "SEARCHING FOR HOST...";
-            
-            // Listen for Host
-            onValue(ref(db, `rooms/${ROOM_ID}/hostID`), (snap) => {
-                TARGET_HOST_ID = snap.val();
-                if (TARGET_HOST_ID) {
-                    log(`Host Found: ${TARGET_HOST_ID}. Auto-Calling...`);
-                    startWebRTC(TARGET_HOST_ID, true);
-                }
-            });
-        }
-
-        // --- 3. SIGNALING ---
-        function initSignaling() {
-            log("Signaling Started.");
-            // Clean old signals
-            remove(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`));
-
-            // Announce presence
-            const myRef = ref(db, `rooms/${ROOM_ID}/players/${MY_ID}`);
-            set(myRef, { online: true, name: session.name });
-            onDisconnect(myRef).remove();
-
-            // Listen for Messages
-            onChildAdded(ref(db, `rooms/${ROOM_ID}/signals/${MY_ID}`), (snapshot) => {
-                const data = snapshot.val();
-                if (data) handleSignal(data.sender, data.payload);
-            });
-
-            // INSTANT DISCONNECT LISTENER
-            onChildRemoved(ref(db, `rooms/${ROOM_ID}/players`), (snapshot) => {
-                const leftPlayerId = snapshot.key;
-                if (leftPlayerId !== MY_ID) {
-                    log(`Player Left: ${leftPlayerId}`);
-                    cleanupPeer(leftPlayerId);
-                }
-            });
-        }
-
-        function sendSignal(targetId, payload) {
-            push(ref(db, `rooms/${ROOM_ID}/signals/${targetId}`), {
-                sender: MY_ID,
-                payload: payload
-            });
-        }
-
-        // --- 4. WEBRTC CORE ---
-        async function startWebRTC(targetId, isInitiator) {
-            if (peers[targetId]) return;
-            
-            log(`Creating PC...`);
-            const pc = new RTCPeerConnection(rtcConfig);
-            peers[targetId] = { conn: pc, channel: null };
-
-            pc.oniceconnectionstatechange = () => {
-                const state = pc.iceConnectionState;
-                log(`ICE State: ${state}`);
-                const statusEl = document.getElementById('disp-status');
-                statusEl.innerText = state.toUpperCase();
-                
-                if(state === 'connected' || state === 'completed') {
-                    statusEl.innerText = "CONNECTED";
-                    statusEl.className = "green"; 
-                } else if (state === 'checking') {
-                    statusEl.className = "orange";
-                } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-                    statusEl.className = "red";
-                    cleanupPeer(targetId);
-                }
-            };
-
-            if (isInitiator) {
-                const channel = pc.createDataChannel("game");
-                setupChannel(channel, targetId);
-            } else {
-                pc.ondatachannel = (e) => setupChannel(e.channel, targetId);
-            }
-
-            pc.onicecandidate = (e) => {
-                if (e.candidate) sendSignal(targetId, { type: 'candidate', candidate: e.candidate.toJSON() });
-            };
-
-            if (isInitiator) {
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
-                sendSignal(targetId, { type: 'offer', sdp: offer });
-            }
-        }
-
-        function cleanupPeer(id) {
-            if (peers[id]) {
-                peers[id].conn.close();
-                delete peers[id];
-            }
+        // --- 2. NETWORK CALLBACKS (Called by webrtc.js) ---
+        
+        window.onNetworkData = (id, data) => {
             if (otherPlayers[id]) {
-                otherPlayers[id].destroy(); 
+                // Update Existing
+                otherPlayers[id].targetX = data.x;
+                otherPlayers[id].targetY = data.y;
+                document.getElementById('enemy-coords').innerText = `${data.x}, ${data.y}`;
+                document.getElementById('enemy-coords').className = "green";
+            } else {
+                // Spawn New
+                spawnEnemy(id, data.x, data.y);
+            }
+        };
+
+        window.onPeerDisconnect = (id) => {
+            if (otherPlayers[id]) {
+                otherPlayers[id].destroy();
                 delete otherPlayers[id];
             }
             document.getElementById('enemy-coords').innerText = "WAITING...";
             document.getElementById('enemy-coords').className = "red";
-            
-            if (AM_I_HOST) {
-                const statusEl = document.getElementById('disp-status');
-                statusEl.innerText = "WAITING FOR CLIENT...";
-                statusEl.className = "red";
-            }
-        }
+        };
 
-        async function handleSignal(senderId, signal) {
-            if (!peers[senderId]) await startWebRTC(senderId, false);
-            const pc = peers[senderId].conn;
-
-            if (signal.type === 'offer') {
-                await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                sendSignal(senderId, { type: 'answer', sdp: answer });
-            } else if (signal.type === 'answer') {
-                if (!pc.currentRemoteDescription) {
-                    await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+        // When pipe opens, send initial spawn location
+        window.onNetworkConnect = () => {
+            setTimeout(() => {
+                if(player) {
+                    broadcastData({ x: Math.round(player.x), y: Math.round(player.y) });
                 }
-            } else if (signal.type === 'candidate') {
-                try { 
-                    if (pc.remoteDescription) {
-                        await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-                    } else {
-                         await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-                    }
-                } catch(e) {}
-            }
-        }
+            }, 500);
+        };
 
-        function setupChannel(channel, id) {
-            channel.onopen = () => {
-                log("Data Channel OPEN");
-                const statusEl = document.getElementById('disp-status');
-                statusEl.innerText = "SYNC ACTIVE";
-                statusEl.className = "green";
 
-                setTimeout(() => {
-                    if(player) {
-                        const packet = JSON.stringify({ x: Math.round(player.x), y: Math.round(player.y) });
-                        channel.send(packet);
-                    }
-                }, 500);
-            };
-            peers[id].channel = channel;
-            
-            channel.onmessage = (e) => {
-                const data = JSON.parse(e.data);
-                if (otherPlayers[id]) {
-                    otherPlayers[id].targetX = data.x;
-                    otherPlayers[id].targetY = data.y;
-                    document.getElementById('enemy-coords').innerText = `${data.x}, ${data.y}`;
-                    document.getElementById('enemy-coords').className = "green";
-                } else {
-                    spawnEnemy(id, data.x, data.y);
-                }
-            };
-        }
-
-        // --- 5. GAME ENGINE ---
+        // --- 3. PHASER ENGINE ---
         function initPhaser() {
             game = new Phaser.Game({
                 type: Phaser.AUTO,
@@ -331,8 +140,7 @@
 
         function preload() {
             const g = this.make.graphics({x:0, y:0, add:false});
-            const color = AM_I_HOST ? 0x3498db : 0x2ecc71;
-            g.fillStyle(color); g.fillRect(0,0,32,32); g.generateTexture('me', 32, 32);
+            g.fillStyle(0x3498db); g.fillRect(0,0,32,32); g.generateTexture('me', 32, 32);
             g.fillStyle(0xe74c3c); g.fillRect(0,0,32,32); g.generateTexture('enemy', 32, 32);
         }
 
@@ -346,6 +154,7 @@
             cursors = this.input.keyboard.createCursorKeys();
             wasd = this.input.keyboard.addKeys('W,A,S,D');
 
+            // Exposed spawn function
             window.spawnEnemy = (id, x, y) => {
                 const e = self.add.sprite(x, y, 'enemy');
                 e.targetX = x; e.targetY = y;
@@ -364,11 +173,10 @@
 
             document.getElementById('my-coords').innerText = `${Math.round(player.x)}, ${Math.round(player.y)}`;
 
-            const packet = JSON.stringify({x: Math.round(player.x), y: Math.round(player.y)});
-            Object.values(peers).forEach(p => {
-                if(p.channel && p.channel.readyState === 'open') p.channel.send(packet);
-            });
+            // Send Movement to Network
+            broadcastData({x: Math.round(player.x), y: Math.round(player.y)});
 
+            // Smooth Movement for enemies
             Object.values(otherPlayers).forEach(e => {
                 e.x = Phaser.Math.Linear(e.x, e.targetX, 0.2);
                 e.y = Phaser.Math.Linear(e.y, e.targetY, 0.2);
