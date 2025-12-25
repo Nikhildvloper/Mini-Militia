@@ -48,10 +48,10 @@
         <div id="status-panel">
             <div>SOLDIER: <span id="disp-id" class="yellow">...</span></div>
             <div>STATUS: <span id="disp-status" class="red">INITIALIZING</span></div>
+            <div id="disp-ping" style="font-size:12px; margin-top:2px;" class="green">PING: 0ms</div>
             
             <div class="coord-box">
                 <div>MY POS: <span id="my-coords" class="green">0, 0</span></div>
-                <div style="margin-top:5px; color:#aaa;">Enemies tracked automatically</div>
             </div>
         </div>
     </div>
@@ -66,7 +66,6 @@
         
         document.getElementById('disp-id').innerText = session.name;
 
-        // --- TRIGGER ---
         const deployBtn = document.getElementById('deploy-btn');
         deployBtn.addEventListener('click', async () => {
             deployBtn.style.display = 'none';
@@ -77,16 +76,13 @@
             document.getElementById('deploy-screen').style.display = 'none';
             document.getElementById('ui-layer').style.display = 'block';
 
-            // Start Mesh Network (Everyone is equal)
             startNetwork(session.room, session.id, session.name);
             initGame();
         });
 
-        // --- CALLBACKS ---
         window.onNetworkData = (id, data) => handleNetworkData(id, data);
         window.onPeerDisconnect = (id) => handlePeerDisconnect(id);
         
-        // When I connect to ANYONE, send my position immediately
         window.onNetworkConnect = () => {
             setTimeout(() => {
                 const pos = getPlayerPosition();
