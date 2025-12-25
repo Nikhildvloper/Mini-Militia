@@ -1,63 +1,27 @@
 import { broadcastData } from "./webrtc.js";
-import Player from "./Player/player.js"; 
 
-// --- GLOBALS ---
 let game;
-let myPlayer; 
+let player;
 let cursors, wasd;
-let joyStickLeft, joyStickRight;
 let otherPlayers = {}; 
+let lastBroadcast = 0;
 
 export function initGame() {
     const config = {
         type: Phaser.AUTO,
         scale: { mode: Phaser.Scale.RESIZE, parent: document.body },
-        backgroundColor: '#5c8a8a', 
-        fps: { target: 60, forceSetTimeOut: true }, 
-        input: { activePointers: 3 }, 
-        
-        physics: { 
-            default: 'arcade', 
-            arcade: { gravity: { y: 0 }, debug: false } 
-        },
-
-        plugins: {
-            global: [{
-                key: 'rexVirtualJoystick',
-                plugin: window.rexvirtualjoystickplugin,
-                start: true
-            }]
-        },
-
+        backgroundColor: '#2c3e50',
+        fps: { target: 60, forceSetTimeOut: true }, // Lock to 60 FPS
+        physics: { default: 'arcade', arcade: { gravity: { y: 0 }, debug: false } },
         scene: { preload, create, update }
     };
     game = new Phaser.Game(config);
 }
 
-// --- NETWORK HANDLERS ---
 export function handleNetworkData(id, data) {
     if (otherPlayers[id]) {
-        const p = otherPlayers[id];
-        
-        // Sync Position
-        p.targetX = data.x;
-        p.targetY = data.y;
-        
-        // Sync Visuals (Flip & Rotation)
-        if (p.list && p.list.length >= 6) {
-            // 0:BackArm, 1:LegL, 2:LegR, 3:Body, 4:Head, 5:FrontArm
-            p.scaleX = data.scaleX; 
-            
-            p.list[5].rotation = data.aimAngle; // Front Arm
-            p.list[0].rotation = data.aimAngle; // Back Arm
-            p.list[4].rotation = data.aimAngle * 0.5; // Head
-
-            // Sync Legs (Optional visual polish)
-            if (data.legRot !== undefined) {
-                p.list[1].rotation = data.legRot;
-                p.list[2].rotation = Math.cos(Math.asin(data.legRot || 0)); // Approx opposite
-            }
-        }
+        otherPlayers[id].targetX = data.x;
+        otherPlayers[id].targetY = data.y;
     } else {
         spawnEnemy(id, data.x, data.y);
     }
@@ -71,51 +35,52 @@ export function handlePeerDisconnect(id) {
 }
 
 export function getPlayerPosition() {
-    if (myPlayer) return myPlayer.getPositionData();
+    if (player) return { x: Math.round(player.x), y: Math.round(player.y) };
     return null;
 }
 
-// --- PHASER SCENE ---
-
 function preload() {
-    // Load your exact assets
-    this.load.image('head', './Player/head.png');
-    this.load.image('body', './Player/body.png');
-    this.load.image('arm',  './Player/arm.png');
-    this.load.image('leg',  './Player/leg.png');
+    const g = this.make.graphics({x:0, y:0, add:false});
+    g.fillStyle(0x3498db); g.fillRect(0,0,32,32); g.generateTexture('me', 32, 32);
+    g.fillStyle(0xe74c3c); g.fillRect(0,0,32,32); g.generateTexture('enemy', 32, 32);
 }
 
 function create() {
-    this.add.grid(0,0,2000,2000,50,50,0x000000).setAlpha(0.1);
+    const self = this;
+    this.add.grid(0,0,2000,2000,50,50,0x000000).setAlpha(0.2);
     this.physics.world.setBounds(-1000, -1000, 2000, 2000);
 
-    // Create Local Player
-    myPlayer = new Player(this, Math.random()*400, Math.random()*400);
+    player = this.physics.add.sprite(Math.random()*400, Math.random()*400, 'me');
+    player.setCollideWorldBounds(true);
     
-    this.cameras.main.startFollow(myPlayer.container);
-    this.cameras.main.setZoom(1.0); 
-    
+    this.cameras.main.startFollow(player);
     cursors = this.input.keyboard.createCursorKeys();
     wasd = this.input.keyboard.addKeys('W,A,S,D');
-
-    createJoysticks(this);
-    
-    this.scale.on('resize', () => resizeJoysticks(this));
 }
 
 function update(time, delta) {
-    if(!myPlayer) return;
+    if(!player) return;
 
-    // Pass controls to Player Class
-    myPlayer.update(joyStickLeft, joyStickRight, cursors, wasd);
+    let ax=0, ay=0; const speed=600;
+    if (cursors.left.isDown || wasd.A.isDown) ax=-speed;
+    else if (cursors.right.isDown || wasd.D.isDown) ax=speed;
+    if (cursors.up.isDown || wasd.W.isDown) ay=-speed;
+    else if (cursors.down.isDown || wasd.S.isDown) ay=speed;
+    player.setVelocity(ax, ay);
 
-    // UI & Broadcast
+    // Update Coords UI
     const myUi = document.getElementById('my-coords');
-    if(myUi) myUi.innerText = `${Math.round(myPlayer.container.x)}, ${Math.round(myPlayer.container.y)}`;
+    if(myUi) myUi.innerText = `${Math.round(player.x)}, ${Math.round(player.y)}`;
 
-    broadcastData(myPlayer.getPositionData());
+    // --- NETWORK THROTTLE (30 Updates per second) ---
+    // Increased from 20 to 30 for smoother movement
+    if (time > lastBroadcast + 30) { 
+        broadcastData({ x: Math.round(player.x), y: Math.round(player.y) });
+        lastBroadcast = time;
+    }
 
-    // Interpolation for Enemies
+    // --- MOVEMENT FIX: FASTER LERP ---
+    // Changed 0.2 to 0.5 for snappier movement (less laggy trail)
     Object.values(otherPlayers).forEach(e => {
         e.x = Phaser.Math.Linear(e.x, e.targetX, 0.5);
         e.y = Phaser.Math.Linear(e.y, e.targetY, 0.5);
@@ -125,39 +90,8 @@ function update(time, delta) {
 function spawnEnemy(id, x, y) {
     if (!game.scene.scenes[0]) return;
     const scene = game.scene.scenes[0];
-    
-    const enemy = new Player(scene, x, y);
-    enemy.container.body.setImmovable(true); 
-    
-    // Tint parts red manually
-    enemy.body.setTint(0xFF5555);
-    enemy.frontArm.setTint(0xFF5555);
-    enemy.backArm.setTint(0xCC4444);
-    
-    otherPlayers[id] = enemy.container;
-}
-
-function createJoysticks(scene) {
-    if (!scene.plugins.get('rexVirtualJoystick')) return;
-
-    joyStickLeft = scene.plugins.get('rexVirtualJoystick').add(scene, {
-        x: 100, y: scene.scale.height - 100,
-        radius: 70,
-        base: scene.add.circle(0, 0, 70, 0x888888).setAlpha(0.3).setDepth(100),
-        thumb: scene.add.circle(0, 0, 35, 0xFFFFFF).setAlpha(0.5).setDepth(100),
-        dir: '8dir', forceMin: 16
-    });
-
-    joyStickRight = scene.plugins.get('rexVirtualJoystick').add(scene, {
-        x: scene.scale.width - 100, y: scene.scale.height - 100,
-        radius: 70,
-        base: scene.add.circle(0, 0, 70, 0x888888).setAlpha(0.3).setDepth(100),
-        thumb: scene.add.circle(0, 0, 35, 0xFF0000).setAlpha(0.5).setDepth(100),
-        dir: '8dir', forceMin: 16
-    });
-}
-
-function resizeJoysticks(scene) {
-    if(joyStickLeft) { joyStickLeft.x = 100; joyStickLeft.y = scene.scale.height - 100; }
-    if(joyStickRight) { joyStickRight.x = scene.scale.width - 100; joyStickRight.y = scene.scale.height - 100; }
+    const enemy = scene.physics.add.sprite(x, y, 'enemy');
+    enemy.targetX = x;
+    enemy.targetY = y;
+    otherPlayers[id] = enemy;
 }
