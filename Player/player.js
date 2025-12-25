@@ -1,145 +1,144 @@
 export default class Player {
-    constructor(scene, x, y, textureKey = 'man') {
+    constructor(scene, x, y) {
         this.scene = scene;
 
-        // 1. CONTAINER (Holds all parts together)
+        // 1. CONTAINER (Holds everything)
         this.container = scene.add.container(x, y);
         this.container.setSize(40, 60);
         scene.physics.world.enable(this.container);
         this.container.body.setCollideWorldBounds(true);
-        this.container.body.setDrag(800); // Stop smoothly
+        this.container.body.setDrag(800); 
 
-        // 2. CREATE PARTS (Order matters for Z-index!)
-        
-        // A. Back Arm (Behind body)
-        this.backArm = scene.add.sprite(15, -5, 'arm');
-        this.backArm.setOrigin(0, 0.5); // Pivot at shoulder
-        this.backArm.setTint(0x999999); // Darker to show depth
+        // 2. CREATE PARTS (Exact order from your snippet)
+
+        // LAYER 1: BACK ARM (Offset: 40, -25)
+        this.backArm = scene.add.sprite(15, -10, 'arm'); // Adjusted offset for Phaser scale
+        this.backArm.setOrigin(0, 0.5); 
+        this.backArm.setTint(0xCCCCCC); 
         this.container.add(this.backArm);
 
-        // B. Legs
-        this.legLeft = scene.add.sprite(-8, 20, 'leg');
-        this.legLeft.setOrigin(0.5, 0); // Pivot at hip
+        // LAYER 2: LEGS (Offsets: -15 and 50)
+        this.legLeft = scene.add.sprite(-8, 15, 'leg');
+        this.legLeft.setOrigin(0.5, 0); 
         this.container.add(this.legLeft);
 
-        this.legRight = scene.add.sprite(8, 20, 'leg');
-        this.legRight.setOrigin(0.5, 0);
+        this.legRight = scene.add.sprite(8, 15, 'leg');
+        this.legRight.setOrigin(0.5, 0); 
         this.container.add(this.legRight);
 
-        // C. Body
+        // LAYER 3: BODY
         this.body = scene.add.sprite(0, 0, 'body');
+        this.body.setOrigin(0.5, 0.5);
         this.container.add(this.body);
 
-        // D. Head
-        this.head = scene.add.sprite(0, -22, 'head');
-        this.head.setOrigin(0.5, 0.8); // Pivot at neck
+        // LAYER 4: HEAD (Offset: 0, -70)
+        this.head = scene.add.sprite(0, -25, 'head'); // Phaser units are different, scaled down from -70
+        this.head.setOrigin(0.5, 0.9);
         this.container.add(this.head);
 
-        // E. Front Arm (In front of body)
-        this.frontArm = scene.add.sprite(15, -5, 'arm');
-        this.frontArm.setOrigin(0, 0.5); // Pivot at shoulder
+        // LAYER 5: FRONT ARM (Offset: -40, -25)
+        this.frontArm = scene.add.sprite(15, -10, 'arm');
+        this.frontArm.setOrigin(0, 0.5); 
         this.container.add(this.frontArm);
-        
-        // State
-        this.isMoving = false;
     }
 
     update(joyStickLeft, joyStickRight, cursors, wasd) {
-        if (!this.container.body) return; // Safety check
+        if (!this.container.body) return;
 
+        // --- 1. MOVEMENT LOGIC (Exact same structure) ---
         const speed = 400;
-        let vx = 0;
-        let vy = 0;
+        let moveX = 0;
+        let moveY = 0;
+        let activeMove = false;
 
-        // --- 1. MOVEMENT INPUT ---
-        // Combine Joystick + Keyboard
-        const joyCursors = joyStickLeft ? joyStickLeft.createCursorKeys() : null;
-
-        if (cursors.left.isDown || wasd.A.isDown || (joyCursors && joyCursors.left.isDown)) vx = -speed;
-        else if (cursors.right.isDown || wasd.D.isDown || (joyCursors && joyCursors.right.isDown)) vx = speed;
-
-        if (cursors.up.isDown || wasd.W.isDown || (joyCursors && joyCursors.up.isDown)) vy = -speed;
-        else if (cursors.down.isDown || wasd.S.isDown || (joyCursors && joyCursors.down.isDown)) vy = speed;
-        
-        // Joystick Analog Precision (if available)
+        // Joystick Input
         if (joyStickLeft && joyStickLeft.force > 0) {
-            vx = Math.cos(joyStickLeft.rotation) * speed;
-            vy = Math.sin(joyStickLeft.rotation) * speed;
+            moveX = Math.cos(joyStickLeft.rotation);
+            moveY = Math.sin(joyStickLeft.rotation);
+            activeMove = true;
+        } 
+        // Keyboard Input (Fallback)
+        else {
+            if (cursors.left.isDown || wasd.A.isDown) { moveX = -1; activeMove = true; }
+            else if (cursors.right.isDown || wasd.D.isDown) { moveX = 1; activeMove = true; }
+            
+            if (cursors.up.isDown || wasd.W.isDown) { moveY = -1; activeMove = true; }
+            else if (cursors.down.isDown || wasd.S.isDown) { moveY = 1; activeMove = true; }
         }
 
-        this.container.body.setVelocity(vx, vy);
-        this.isMoving = (Math.abs(vx) > 10 || Math.abs(vy) > 10);
+        // Apply Velocity
+        this.container.body.setVelocity(moveX * speed, moveY * speed);
 
-        // --- 2. LEG ANIMATION ---
-        if (this.isMoving) {
-            const time = this.scene.time.now;
-            this.legLeft.rotation = Math.sin(time / 100) * 0.5;
-            this.legRight.rotation = Math.cos(time / 100) * 0.5;
+        // --- 2. LEG ANIMATION (Your Exact Math) ---
+        if (activeMove) {
+            const time = Date.now() / 100;
+            this.legLeft.rotation = Math.sin(time) * 0.4;
+            this.legRight.rotation = Math.cos(time) * 0.4;
         } else {
             this.legLeft.rotation = 0;
             this.legRight.rotation = 0;
         }
 
-        // --- 3. AIMING LOGIC (The "Perfect Aim") ---
+        // --- 3. AIMING LOGIC (Your Exact Math) ---
         let angle = 0;
-        let activeAim = false;
+        let aimActive = false;
 
-        // Check Input Source
+        // Use Right Joystick for Aim
         if (joyStickRight && joyStickRight.force > 0) {
             angle = joyStickRight.rotation;
-            activeAim = true;
-        } else if (vx !== 0 || vy !== 0) {
-            // If not aiming, look where moving
-            angle = Math.atan2(vy, vx);
-            activeAim = true;
+            aimActive = true;
+        } 
+        // Fallback: Use Movement Direction if no aim
+        else if (activeMove) {
+            angle = Math.atan2(moveY, moveX);
+            aimActive = true;
         }
 
-        if (activeAim) {
-            // Phaser Rotation is -PI to PI
-            // Left Side is when angle is > 90 deg (PI/2) or < -90 deg (-PI/2)
+        if (aimActive) {
+            // Your Logic: Check if angle is between 90 (PI/2) and 270 (-PI/2 in Phaser)
+            // Phaser rotation goes from -PI to PI.
+            // Left side is when absolute value of angle > PI/2
             const isLookingLeft = Math.abs(angle) > Math.PI / 2;
 
             if (isLookingLeft) {
                 // --- FACE LEFT ---
-                this.container.scaleX = -1; // Flip entire rig
+                this.container.scaleX = -1; // Flip Player
 
-                // Math: We need to mirror the angle because the container is flipped.
-                // If aiming left (PI), we want the arm at 0 relative to the flipped body.
-                // Formula: PI - angle (or -PI - angle depending on sign) -> Math.atan2(sin, -cos) shortcut?
-                // Simplest way for Phaser flipped container:
-                // Rotation = PI - Angle
-                
-                let localRotation = Math.PI - angle;
-                // Normalize to -PI to PI
-                while (localRotation > Math.PI) localRotation -= Math.PI * 2;
-                while (localRotation < -Math.PI) localRotation += Math.PI * 2;
+                // Logic: rotation = angle - PI
+                let correctRot = angle - Math.PI;
+                // Normalize
+                if (correctRot < -Math.PI) correctRot += Math.PI * 2;
+                if (correctRot > Math.PI) correctRot -= Math.PI * 2;
 
-                this.frontArm.rotation = localRotation;
-                this.backArm.rotation = localRotation;
+                this.frontArm.rotation = correctRot;
+                this.backArm.rotation = correctRot;
                 
-                // Head looks slightly up/down but clamp it so it doesn't break neck
-                this.head.rotation = Phaser.Math.Clamp(localRotation * 0.5, -0.5, 0.5);
+                // Head Clamp
+                this.head.rotation = Math.max(-0.5, Math.min(0.5, correctRot * 0.5));
 
             } else {
                 // --- FACE RIGHT ---
                 this.container.scaleX = 1; // Normal
 
-                this.frontArm.rotation = angle;
-                this.backArm.rotation = angle;
+                let correctRot = angle;
                 
-                // Head Rotation
-                this.head.rotation = Phaser.Math.Clamp(angle * 0.5, -0.5, 0.5);
+                this.frontArm.rotation = correctRot;
+                this.backArm.rotation = correctRot;
+
+                // Head Clamp
+                this.head.rotation = Math.max(-0.5, Math.min(0.5, correctRot * 0.5));
             }
         }
     }
 
-    // --- GETTERS FOR NETWORK ---
+    // --- NETWORK HELPERS ---
     getPositionData() {
         return {
             x: Math.round(this.container.x),
             y: Math.round(this.container.y),
-            aimAngle: this.frontArm.rotation, // Send arm rotation
-            scaleX: this.container.scaleX     // Send flip direction
+            aimAngle: this.frontArm.rotation,
+            scaleX: this.container.scaleX,
+            legRot: this.legLeft.rotation // Sync leg anim for smoothness
         };
     }
 
